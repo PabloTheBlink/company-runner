@@ -52,7 +52,7 @@ test('agent runtime reports installed providers without loading credentials or s
 
     assert.equal(await run(['agent', 'runtime'], { stdout: output }, process.cwd(), {}), 0);
     assert.match(output.value, /Diagnóstico local: no conecta con MyCompanies, no lee tareas ni credenciales y no inicia ninguna sesión/);
-    assert.match(output.value, /agent runtime run ID --provider=agy/);
+    assert.match(output.value, /agent runtime run ID --provider=codex\|agy/);
     for (const runtime of runtimes) {
         assert.match(output.value, new RegExp(`${runtime.provider} \\(${runtime.command}\\)`));
     }
@@ -69,25 +69,36 @@ test('agent runtime plan requires a positive task ID and explicit supported prov
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=codex', '--provider=claude']), /Uso:/);
 });
 
-test('agent runtime run requires a valid task, AgY provider, and bounded timeout', () => {
+test('agent runtime run requires a valid task, supported provider, and bounded timeout', () => {
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=agy']), {
         taskId: 42,
         provider: 'agy',
         timeoutSeconds: 300,
         publishPath: null,
+        allowNetwork: false,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--timeout=600', '--provider=agy']), {
         taskId: 42,
         provider: 'agy',
         timeoutSeconds: 600,
         publishPath: null,
+        allowNetwork: false,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=reports/daily.md']), {
         taskId: 42,
         provider: 'agy',
         timeoutSeconds: 300,
         publishPath: 'reports/daily.md',
+        allowNetwork: false,
     });
+    assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=codex']), {
+        taskId: 42,
+        provider: 'codex',
+        timeoutSeconds: 300,
+        publishPath: null,
+        allowNetwork: false,
+    });
+    assert.equal(parseAgentRuntimeRunOptions(['42', '--provider=codex', '--allow-network']).allowNetwork, true);
     assert.throws(() => parseAgentRuntimeRunOptions(['0', '--provider=agy']), /positivo/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=other']), /Opción desconocida/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=9']), /entre 10 y 900/);
@@ -95,6 +106,7 @@ test('agent runtime run requires a valid task, AgY provider, and bounded timeout
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=300', '--timeout=400']), /Uso:/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=']), /ruta/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=reports/a.md', '--publish=reports/b.md']), /repetida/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--allow-network']), /solo está disponible para Codex/);
 });
 
 test('agent runtime file access commands require one safe path and one explicit operation', () => {
@@ -298,7 +310,10 @@ test('agent runtime run stages only granted files, applies only authorized write
             ];
         },
     };
-    const runtimeDetector = async () => [{ provider: 'agy', command: 'agy' }];
+    const runtimeDetector = async () => [
+        { provider: 'agy', command: 'agy' },
+        { provider: 'codex', command: 'codex' },
+    ];
     const agentRuntimeRunner = async (request) => {
         taskRunnerCalls.push(request);
         assert.notEqual(request.cwd, companyRoot);
@@ -325,7 +340,7 @@ test('agent runtime run stages only granted files, applies only authorized write
 
     try {
         assert.equal(await run(
-            ['agent', 'runtime', 'run', '42', '--provider=agy', '--publish=reports/daily.md'],
+            ['agent', 'runtime', 'run', '42', '--provider=codex', '--allow-network', '--publish=reports/daily.md'],
             { stdout: output, stderr: output },
             companyRoot,
             configStore,
@@ -337,12 +352,15 @@ test('agent runtime run stages only granted files, applies only authorized write
         ), 0);
         assert.deepEqual(requests, ['/api/v1/agent/me', '/api/v1/agent/tasks/42', '/api/v1/agent/tasks/42']);
         assert.equal(taskRunnerCalls.length, 1);
+        assert.equal(taskRunnerCalls[0].provider, 'codex');
+        assert.equal(taskRunnerCalls[0].allowNetwork, true);
         assert.equal(taskRunnerCalls[0].timeoutMs, 300_000);
         assert.deepEqual(confirmations[0].fileSummary, {
             read: ['.env'],
             write: ['.env', 'reports/daily.md'],
         });
         assert.equal(confirmations[0].publishPath, 'reports/daily.md');
+        assert.equal(confirmations[0].allowNetwork, true);
         assert.deepEqual(publishedArtifacts, [{
             filePath: 'reports/daily.md',
             metadata: { title: 'Preparar informe', source: 'MyCompanies task #42' },
@@ -835,8 +853,9 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent identities/);
     assert.match(output.value, /mycompany agent credential list AGENT_ID/);
     assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
-    assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=agy/);
-    assert.match(output.value, /deniega shell, web, MCP/);
+    assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=codex\|agy/);
+    assert.match(output.value, /red está deshabilitada por defecto/);
+    assert.match(output.value, /red abierta solo para Codex/);
     assert.match(output.value, /confirmación escrita en un terminal interactivo/);
     assert.match(output.value, /read expone el contenido al agente/);
     assert.doesNotMatch(output.value, /Dev\.to|devto/i);

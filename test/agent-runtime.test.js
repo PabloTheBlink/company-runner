@@ -2,7 +2,102 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { buildAntigravityInvocation, runAntigravityAgent } from '../src/agent-runtime.js';
+import { buildAntigravityInvocation, buildCodexInvocation, runAgentRuntime, runAntigravityAgent, runCodexAgent } from '../src/agent-runtime.js';
+
+test('Codex invocation is ephemeral, workspace-write sandboxed, and network-disabled', () => {
+    const invocation = buildCodexInvocation({ prompt: 'private task text', cwd: '/private/staging', timeoutMs: 60_000 });
+
+    assert.equal(invocation.command, 'codex');
+    assert.ok(invocation.args.includes('exec'));
+    assert.ok(invocation.args.includes('--sandbox'));
+    assert.ok(invocation.args.includes('workspace-write'));
+    assert.ok(invocation.args.includes('--ephemeral'));
+    assert.ok(invocation.args.includes('--json'));
+    assert.ok(invocation.args.includes('--ignore-user-config'));
+    assert.ok(invocation.args.includes('--ignore-rules'));
+    assert.ok(invocation.args.includes('sandbox_workspace_write.network_access=false'));
+    assert.equal(invocation.args.includes('private task text'), false);
+    assert.equal(invocation.cwd, '/private/staging');
+    assert.match(invocation.input, /private task text/);
+
+    const networkInvocation = buildCodexInvocation({
+        prompt: 'research task',
+        cwd: '/private/staging',
+        timeoutMs: 60_000,
+        allowNetwork: true,
+    });
+    assert.ok(networkInvocation.args.includes('sandbox_workspace_write.network_access=true'));
+});
+
+test('Codex process receives task input over stdin and parses only the final agent message', async () => {
+    let receivedOptions;
+    let receivedInput = '';
+    const spawnImplementation = (command, args, options) => {
+        assert.equal(command, '/usr/local/bin/codex');
+        assert.ok(args.includes('--sandbox'));
+        receivedOptions = { command, args, ...options };
+        const child = createFakeChild();
+        child.stdin.on('data', (chunk) => { receivedInput += chunk.toString(); });
+        setImmediate(() => {
+            child.stdout.end([
+                JSON.stringify({ type: 'thread.started', thread_id: 'private-id' }),
+                JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Informe redactado' } }),
+                JSON.stringify({ type: 'turn.completed' }),
+            ].join('\n'));
+            child.emit('close', 0, null);
+        });
+        return child;
+    };
+
+    const result = await runAgentRuntime({
+        provider: 'codex',
+        prompt: 'contexto privado',
+        cwd: '/private/staging',
+        timeoutMs: 60_000,
+        spawnImplementation,
+        sandboxVerifier: async () => true,
+        commandResolver: () => '/usr/local/bin/codex',
+        allowNetwork: true,
+        environment: { PATH: '/usr/bin', HOME: '/home/test', OPENAI_API_KEY: 'do-not-pass', GEMINI_API_KEY: 'do-not-pass' },
+    });
+
+    assert.equal(receivedOptions.cwd, '/private/staging');
+    assert.equal(receivedOptions.command, '/usr/local/bin/codex');
+    assert.equal(receivedOptions.shell, false);
+    assert.equal(receivedOptions.detached, true);
+    assert.equal(receivedOptions.env.OPENAI_API_KEY, undefined);
+    assert.equal(receivedOptions.env.GEMINI_API_KEY, undefined);
+    assert.ok(receivedOptions.args.includes('sandbox_workspace_write.network_access=true'));
+    assert.match(receivedInput, /contexto privado/);
+    assert.deepEqual(result, { response: 'Informe redactado' });
+});
+
+test('Codex runtime rejects a response without a completed turn', async () => {
+    const spawnImplementation = () => {
+        const child = createFakeChild();
+        setImmediate(() => {
+            child.stdout.end(JSON.stringify({
+                type: 'item.completed',
+                item: { type: 'agent_message', text: 'Respuesta parcial' },
+            }));
+            child.emit('close', 0, null);
+        });
+        return child;
+    };
+
+    await assert.rejects(runCodexAgent({
+        prompt: 'contexto',
+        cwd: '/private/staging',
+        timeoutMs: 60_000,
+        spawnImplementation,
+        sandboxVerifier: async () => true,
+        commandResolver: () => '/usr/local/bin/codex',
+    }), /respuesta satisfactoria/);
+});
+
+test('Agent runtime refuses providers without an execution adapter', async () => {
+    await assert.rejects(runAgentRuntime({ provider: 'claude' }), /Claude Code.*no está disponible/);
+});
 
 test('Antigravity invocation forces an isolated, tool-limited session', () => {
     const invocation = buildAntigravityInvocation({ prompt: 'private task text', timeoutMs: 60_000 });
