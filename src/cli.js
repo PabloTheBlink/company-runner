@@ -1117,9 +1117,11 @@ function printHelp(stdout) {
     stdout.write('    Contacta con MyCompanies para confirmar que la credencial sigue activa y muestra empresa, Runner y Workspaces lógicos asignados.\n');
     stdout.write('    No escanea la carpeta local ni ejecuta trabajo.\n');
     stdout.write('  mycompany work\n');
-    stdout.write('  mycompany capabilities\n');
     stdout.write('    Consulta si hay una comprobación autorizada de capacidad fija, comprueba acceso de lectura a la carpeta y devuelve solo ese resultado.\n');
     stdout.write('    No ejecuta código o comandos enviados por el servidor ni transmite la ruta local.\n');
+    stdout.write('  mycompany capabilities\n');
+    stdout.write('    Comprueba localmente qué adaptadores están instalados en la carpeta de empresa. No ejecuta los adaptadores.\n');
+    stdout.write('    No conecta con MyCompanies ni Dev.to y no lee .env ni muestra credenciales.\n');
     stdout.write('  mycompany tasks [--status=open|in_progress|blocked] [--after=ID]\n');
     stdout.write('    Consulta y lista tareas activas de los Workspaces asignados. Usa --after=ID para continuar una lista larga.\n');
     stdout.write('    Solo las muestra. No reclama, modifica, marca como terminadas ni ejecuta sus descripciones.\n');

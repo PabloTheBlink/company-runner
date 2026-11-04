@@ -293,6 +293,11 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany init/);
     assert.match(output.value, /mycompany work/);
     assert.match(output.value, /mycompany capabilities/);
+    const workHelp = output.value.split('mycompany work')[1].split('mycompany capabilities')[0];
+    const capabilitiesHelp = output.value.split('mycompany capabilities')[1].split('mycompany tasks')[0];
+    assert.match(workHelp, /comprobación autorizada/);
+    assert.match(capabilitiesHelp, /localmente/);
+    assert.match(capabilitiesHelp, /No conecta con MyCompanies ni Dev\.to/);
     assert.match(output.value, /mycompany tasks/);
     assert.match(output.value, /mycompany tasks \[--status=open\|in_progress\|blocked\] \[--after=ID\]/);
     assert.match(output.value, /mycompany task ID/);
