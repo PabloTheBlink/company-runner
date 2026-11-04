@@ -7,6 +7,36 @@ const SUPPORTED_PROVIDERS = [
     { provider: 'claude', command: 'claude' },
 ];
 
+export function createAgentRuntimePlan(provider, installedProviders, identity, task) {
+    if (!['codex', 'claude'].includes(provider) || !installedProviders.includes(provider)) {
+        throw new Error(`El proveedor ${provider} no está instalado localmente.`);
+    }
+    if (!Number.isSafeInteger(identity?.agent?.id) || identity.agent.id < 1
+        || typeof identity.agent.name !== 'string'
+        || typeof identity.company?.name !== 'string') {
+        throw new Error('La identidad Agent no es válida para preparar el plan.');
+    }
+    if (!['open', 'in_progress'].includes(task?.status)) {
+        throw new Error('La tarea debe estar abierta o en curso para preparar el plan.');
+    }
+    if (task.assignee?.type !== 'agent' || task.assignee.id !== identity.agent.id) {
+        throw new Error('La tarea debe estar asignada al Agent seleccionado.');
+    }
+    if (!Number.isSafeInteger(task.id) || task.id < 1 || typeof task.title !== 'string') {
+        throw new Error('La tarea no es válida para preparar el plan.');
+    }
+
+    return {
+        provider,
+        agentId: identity.agent.id,
+        agentName: identity.agent.name,
+        companyName: identity.company.name,
+        taskId: task.id,
+        taskTitle: task.title,
+        taskStatus: task.status,
+    };
+}
+
 export async function listLocalAgentRuntimes(
     pathValue = process.env.PATH ?? '',
     platform = process.platform,

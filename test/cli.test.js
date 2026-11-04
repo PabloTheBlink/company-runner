@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimePlanOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 import { listLocalAgentRuntimes } from '../src/runtime.js';
@@ -56,7 +56,96 @@ test('agent runtime reports installed providers without loading credentials or s
     for (const runtime of runtimes) {
         assert.match(output.value, new RegExp(`${runtime.provider} \\(${runtime.command}\\)`));
     }
-    await assert.rejects(run(['agent', 'runtime', '--provider=codex'], { stdout: output }, process.cwd(), {}), /No admite opciones/);
+    await assert.rejects(run(['agent', 'runtime', '--provider=codex'], { stdout: output }, process.cwd(), {}), /Uso:/);
+});
+
+test('agent runtime plan requires a positive task ID and explicit supported provider', () => {
+    assert.deepEqual(parseAgentRuntimePlanOptions(['42', '--provider=codex']), { taskId: 42, provider: 'codex' });
+    assert.deepEqual(parseAgentRuntimePlanOptions(['42', '--provider=claude']), { taskId: 42, provider: 'claude' });
+    assert.throws(() => parseAgentRuntimePlanOptions(['42']), /provider/);
+    assert.throws(() => parseAgentRuntimePlanOptions(['0', '--provider=codex']), /positivo/);
+    assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=other']), /proveedor/);
+    assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=codex', '--provider=claude']), /Uso:/);
+});
+
+test('agent runtime plan checks the selected Agent and assigned task without starting a provider', async () => {
+    const token = 'P'.repeat(80);
+    const requests = [];
+    const server = createServer((request, response) => {
+        requests.push(request.url);
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: 'CEO' },
+                company: { id: 4, name: 'Devetty' },
+                permissions: [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }],
+            }));
+            return;
+        }
+        assert.equal(request.url, '/api/v1/agent/tasks/42');
+        response.end(JSON.stringify({ task: {
+            id: 42,
+            title: 'Investigar canales',
+            description: 'No debe copiarse al plan.',
+            status: 'in_progress',
+            priority: 'normal',
+            due_date: null,
+            assignee: { type: 'agent', id: 12, name: 'Vera' },
+            workspace: { id: 5, name: 'Marketing' },
+        } }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const configStore = {
+        async loadAgentForDirectory(directory) {
+            assert.equal(directory, '/company');
+            return {
+                server_url: `http://127.0.0.1:${server.address().port}`,
+                agent_id: 12,
+                company_id: 4,
+                allow_insecure_localhost: true,
+                api_token: token,
+            };
+        },
+    };
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+    const detectRuntime = async () => [{ provider: 'codex', command: 'codex' }];
+
+    try {
+        assert.equal(await run(
+            ['agent', 'runtime', 'plan', '42', '--provider=codex'],
+            { stdout },
+            '/company',
+            configStore,
+            detectRuntime,
+        ), 0);
+        assert.deepEqual(requests, ['/api/v1/agent/me', '/api/v1/agent/tasks/42']);
+        assert.match(stdout.value, /Plan de ejecución local \(no iniciado\)/);
+        assert.match(stdout.value, /Agent: Vera \(#12\)/);
+        assert.match(stdout.value, /Tarea: #42 · Investigar canales \(en curso\)/);
+        assert.match(stdout.value, /Proveedor: Codex/);
+        assert.doesNotMatch(stdout.value, /No debe copiarse|api_token|Bearer/);
+    } finally {
+        server.close();
+        await once(server, 'close');
+    }
+});
+
+test('agent runtime plan does not connect when the selected provider is unavailable', async () => {
+    const configStore = {
+        async loadAgentForDirectory() {
+            throw new Error('No debe leer la credencial Agent.');
+        },
+    };
+
+    await assert.rejects(run(
+        ['agent', 'runtime', 'plan', '42', '--provider=codex'],
+        { stdout: { write() {} } },
+        '/company',
+        configStore,
+        async () => [],
+    ), /no está instalado/);
 });
 
 test('agent task listing accepts a single positive cursor', () => {

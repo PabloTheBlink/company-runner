@@ -6,9 +6,15 @@ import { ConfigStore } from './config.js';
 import { AgentClient, formatAssignee, RunnerClient } from './client.js';
 import { listLocalCapabilities } from './capabilities/devto-stats-totals.js';
 import { initializeCompanyRoot } from './company-kit.js';
-import { listLocalAgentRuntimes } from './runtime.js';
+import { createAgentRuntimePlan, listLocalAgentRuntimes } from './runtime.js';
 
-export async function run(argumentsList, streams = process, currentDirectory = process.cwd(), configStore = new ConfigStore()) {
+export async function run(
+    argumentsList,
+    streams = process,
+    currentDirectory = process.cwd(),
+    configStore = new ConfigStore(),
+    runtimeDetector = listLocalAgentRuntimes,
+) {
     const [command = 'help', ...argumentsAfterCommand] = argumentsList;
     if (['help', '--help', '-h'].includes(command)) {
         printHelp(streams.stdout);
@@ -92,8 +98,27 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         const [agentCommand, ...agentArguments] = argumentsAfterCommand;
         const agentClient = new AgentClient(configStore);
         if (agentCommand === 'runtime') {
-            if (agentArguments.length !== 0) throw new Error('Uso: mycompany agent runtime. No admite opciones.');
-            const runtimes = await listLocalAgentRuntimes();
+            if (agentArguments[0] === 'plan') {
+                const options = parseAgentRuntimePlanOptions(agentArguments.slice(1));
+                const installedRuntimes = await runtimeDetector();
+                if (!installedRuntimes.some(({ provider }) => provider === options.provider)) {
+                    throw new Error(`El proveedor ${options.provider} no está instalado localmente.`);
+                }
+                const identity = await agentClient.identity(currentDirectory);
+                const task = await agentClient.getTask(options.taskId, currentDirectory);
+                const plan = createAgentRuntimePlan(options.provider, installedRuntimes.map(({ provider }) => provider), identity, task);
+                const providerLabel = plan.provider === 'codex' ? 'Codex' : 'Claude Code';
+                const statusLabel = plan.taskStatus === 'open' ? 'abierta' : 'en curso';
+                streams.stdout.write('Plan de ejecución local (no iniciado):\n');
+                streams.stdout.write(`Empresa: ${safeTerminalText(plan.companyName)} · Agent: ${safeTerminalText(plan.agentName)} (#${plan.agentId})\n`);
+                streams.stdout.write(`Tarea: #${plan.taskId} · ${safeTerminalText(plan.taskTitle)} (${statusLabel})\n`);
+                streams.stdout.write(`Proveedor: ${providerLabel}\n`);
+                streams.stdout.write('MyCompanies confirmó identidad activa y lectura de esta tarea asignada al Agent.\n');
+                streams.stdout.write('No se ha iniciado un modelo ni se han comprobado permisos locales de archivos, terminal o red.\n');
+                return 0;
+            }
+            if (agentArguments.length !== 0) throw new Error('Uso: mycompany agent runtime | mycompany agent runtime plan TASK_ID --provider=codex|claude.');
+            const runtimes = await runtimeDetector();
             if (runtimes.length === 0) {
                 streams.stdout.write('No se encontró Codex ni Claude Code en PATH.\n');
             } else {
@@ -617,6 +642,19 @@ export function parseAgentLoginOptions(argumentsList) {
     }
     if (!options.server) throw new Error('Falta el servidor. Usa agent login --server=URL.');
     return options;
+}
+
+export function parseAgentRuntimePlanOptions(argumentsList) {
+    if (argumentsList.length !== 2 || !argumentsList[1].startsWith('--provider=')) {
+        throw new Error('Uso: mycompany agent runtime plan TASK_ID --provider=codex|claude.');
+    }
+
+    const provider = argumentsList[1].slice('--provider='.length);
+    if (!['codex', 'claude'].includes(provider)) {
+        throw new Error('El proveedor debe ser codex o claude.');
+    }
+
+    return { taskId: parseTaskId(argumentsList[0]), provider };
 }
 
 export function parseAgentTasksOptions(argumentsList) {
@@ -1169,6 +1207,8 @@ function printHelp(stdout) {
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
     stdout.write('  mycompany agent runtime\n');
     stdout.write('    Detecta Codex y Claude Code en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
+    stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude\n');
+    stdout.write('    Comprueba identidad, acceso a tarea y asignación del Agent. Solo muestra un plan; no inicia un modelo.\n');
     stdout.write('  mycompany agent permissions\n');
     stdout.write('    Consulta el catálogo vigente de capacidades y los alcances que admiten.\n');
     stdout.write('  mycompany agent pause AGENT_ID | resume AGENT_ID\n');

@@ -86,13 +86,14 @@ Only `.md`, `.txt`, and `.pdf` files up to 10 MiB are accepted. The CLI rejects 
 
 ## Codex and Claude Code in a company folder
 
-You can start Codex or Claude Code manually from a company root after reviewing that company's `AGENTS.md` or `CLAUDE.md`. The CLI can separately authenticate as a MyCompanies Agent and show its server identity and active grants. It does not launch an assistant or execute Agent tasks. A profile's title and local instructions do not grant API permissions. Every future connected action must enforce its capability and scope on the server and record its actor.
+You can start Codex or Claude Code manually from a company root after reviewing that company's `AGENTS.md` or `CLAUDE.md`. The CLI can separately authenticate as a MyCompanies Agent and show its server identity and active grants. `agent runtime plan` confirms access to a specific active task and checks that it is assigned to the selected Agent, but it does not launch an assistant or execute the task. A profile's title and local instructions do not grant API permissions. Every connected action must enforce its capability and scope on the server and record its actor.
 
 Create a runtime credential from the company's Agents page and enter it when prompted; it is shown only once. From the company root, run:
 
 ```sh
 mycompany agent login --server=https://YOUR-MYCOMPANIES-HOST
 mycompany agent me
+mycompany agent runtime plan 42 --provider=codex
 mycompany agent tasks
 mycompany agent tasks --status=blocked
 mycompany agent task 42
@@ -158,7 +159,7 @@ The web authorization history derives an overdue `running` attempt as `uncertain
 
 Run `mycompany capabilities` from an enrolled company folder to check which supported local adapters are present. It only checks local files, does not contact MyCompanies or Dev.to, does not inspect `.env` or print credentials, and does not run an adapter.
 
-The Agent CLI currently validates credentials, reads identity/grants, creates and manages direct report profiles with `agents.manage`, delegates/revokes grants with `agents.permissions.manage`, and issues/revokes individual report credentials with `agents.credentials.manage`. It also lists scoped active tasks, company goals, assets and Workspaces; creates/edits tasks; changes task and offer status; assigns tasks to agents; reads company bets/evidence and offers; records bet evidence with `bets.manage`; changes bet status with `bets.status.manage`; converts validated bets with `offers.manage`; and publishes/lists/downloads company reports with artifact grants. `mycompany agent runtime` only detects whether `codex` and `claude` executables exist in `PATH`; it does not launch an AI assistant, run local scripts or contact MyCompanies.
+The Agent CLI currently validates credentials, reads identity/grants, creates and manages direct report profiles with `agents.manage`, delegates/revokes grants with `agents.permissions.manage`, and issues/revokes individual report credentials with `agents.credentials.manage`. It also lists scoped active tasks, company goals, assets and Workspaces; creates/edits tasks; changes task and offer status; assigns tasks to agents; reads company bets/evidence and offers; records bet evidence with `bets.manage`; changes bet status with `bets.status.manage`; converts validated bets with `offers.manage`; and publishes/lists/downloads company reports with artifact grants. `mycompany agent runtime` only detects whether `codex` and `claude` executables exist in `PATH`. `mycompany agent runtime plan TASK_ID --provider=codex|claude` confirms the active Agent identity, API read access to the task and that its assignee ID matches the Agent. The plan prints only the task title and status; it does not launch a provider, run local scripts or start execution.
 
 Codex/Claude runtime integration remains future work. MyCompanies grants govern API operations; they do not grant local shell, filesystem, network or provider permissions. The server will not deliver executable commands. A first runtime integration should be manually started for a selected Agent and task, isolated to the company root, bounded by a timeout and observable/interruption-capable. The design notes and current provider evaluation live in [MyCompanies architecture](https://github.com/PabloTheBlink/mycompanies/blob/main/docs/vision-and-architecture.md#dirección-para-conectar-un-runtime-local).
 
