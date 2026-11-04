@@ -37,6 +37,36 @@ export function createAgentRuntimePlan(provider, installedProviders, identity, t
     };
 }
 
+export function isLocalFileOperationAllowed(agentId, grants, operation, relativePath) {
+    const normalizedPath = normalizeLocalPolicyPath(relativePath);
+    if (!Number.isSafeInteger(agentId) || agentId < 1
+        || !['read', 'write'].includes(operation)
+        || normalizedPath === null
+        || !Array.isArray(grants)) {
+        return false;
+    }
+
+    return grants.some((grant) => grant?.agentId === agentId
+        && normalizeLocalPolicyPath(grant.path) === normalizedPath
+        && Array.isArray(grant.operations)
+        && grant.operations.includes(operation));
+}
+
+function normalizeLocalPolicyPath(value) {
+    if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) return null;
+
+    const portablePath = value.replaceAll('\\', '/');
+    if (portablePath.startsWith('/') || /^[a-zA-Z]:/.test(portablePath)) return null;
+
+    const segments = portablePath.split('/');
+    if (segments.includes('..')) return null;
+
+    const normalizedPath = path.posix.normalize(portablePath).replace(/^\.\//, '');
+    if (normalizedPath === '.' || normalizedPath.startsWith('../')) return null;
+
+    return normalizedPath;
+}
+
 export async function listLocalAgentRuntimes(
     pathValue = process.env.PATH ?? '',
     platform = process.platform,

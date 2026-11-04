@@ -1,6 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAgentRuntimePlan, listLocalAgentRuntimes } from '../src/runtime.js';
+import { createAgentRuntimePlan, isLocalFileOperationAllowed, listLocalAgentRuntimes } from '../src/runtime.js';
+
+test('allows only an explicitly granted Agent, operation, and exact local path', () => {
+    const grants = [
+        { agentId: 12, path: '.env', operations: ['read', 'write'] },
+        { agentId: 12, path: 'reports/daily.md', operations: ['read'] },
+    ];
+
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'read', '.env'), true);
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'write', '.env'), true);
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'write', 'reports/daily.md'), false);
+    assert.equal(isLocalFileOperationAllowed(13, grants, 'read', '.env'), false);
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'read', '.env.local'), false);
+});
+
+test('rejects unsafe paths and unsupported local file operations', () => {
+    const grants = [{ agentId: 12, path: '.env', operations: ['read', 'write'] }];
+
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'read', '../.env'), false);
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'read', '/etc/passwd'), false);
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'delete', '.env'), false);
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'read', ''), false);
+});
 
 test('lists supported local providers without returning executable paths', async () => {
     const checkedPaths = [];
