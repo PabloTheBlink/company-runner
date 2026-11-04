@@ -292,12 +292,16 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany heartbeat/);
     assert.match(output.value, /mycompany init/);
     assert.match(output.value, /mycompany work/);
+    assert.match(output.value, /mycompany execute/);
     assert.match(output.value, /mycompany capabilities/);
     const workHelp = output.value.split('mycompany work')[1].split('mycompany capabilities')[0];
     const capabilitiesHelp = output.value.split('mycompany capabilities')[1].split('mycompany tasks')[0];
     assert.match(workHelp, /comprobación autorizada/);
     assert.match(capabilitiesHelp, /localmente/);
     assert.match(capabilitiesHelp, /No conecta con MyCompanies ni Dev\.to/);
+    const executeHelp = output.value.split('mycompany execute')[1].split('mycompany tasks')[0];
+    assert.match(executeHelp, /después de que MyCompanies confirme \/start/);
+    assert.match(executeHelp, /no hace polling/);
     assert.match(output.value, /mycompany tasks/);
     assert.match(output.value, /mycompany tasks \[--status=open\|in_progress\|blocked\] \[--after=ID\]/);
     assert.match(output.value, /mycompany task ID/);
@@ -340,6 +344,15 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /No reclama, modifica, marca como terminadas ni ejecuta/);
     assert.match(output.value, /No revoca el Runner en MyCompanies/);
     assert.doesNotMatch(output.value, /company-runner/);
+});
+
+test('execute rejects command options before contacting MyCompanies', async () => {
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+
+    await assert.rejects(
+        run(['execute', '--anything'], { stdout: output, stderr: output }, process.cwd()),
+        /execute no admite opciones/,
+    );
 });
 
 test('capabilities reports locally installed adapters without contacting MyCompanies', async () => {

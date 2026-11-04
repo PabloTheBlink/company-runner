@@ -497,6 +497,19 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         return 0;
     }
 
+    if (command === 'execute') {
+        if (argumentsAfterCommand.length !== 0) throw new Error('execute no admite opciones.');
+        const result = await client.executeOnce(currentDirectory);
+        if (result === null) {
+            streams.stdout.write('No hay ejecuciones autorizadas para este Runner.\n');
+        } else if (result.outcome === 'succeeded') {
+            streams.stdout.write(`Ejecución completada · ${result.article_count} artículos procesados.\n`);
+        } else {
+            streams.stdout.write('La capacidad falló; el resultado quedó registrado para revisión.\n');
+        }
+        return 0;
+    }
+
     if (command === 'tasks') {
         const options = parseTasksOptions(argumentsAfterCommand);
         const result = await client.listTasks(currentDirectory, options.afterId, options.status);
@@ -1119,6 +1132,9 @@ function printHelp(stdout) {
     stdout.write('  mycompany work\n');
     stdout.write('    Consulta si hay una comprobación autorizada de capacidad fija, comprueba acceso de lectura a la carpeta y devuelve solo ese resultado.\n');
     stdout.write('    No ejecuta código o comandos enviados por el servidor ni transmite la ruta local.\n');
+    stdout.write('  mycompany execute\n');
+    stdout.write('    Reclama una autorización manual y ejecuta solo devto.stats.totals@1.0.0 después de que MyCompanies confirme /start.\n');
+    stdout.write('    Envía métricas filtradas; no ejecuta comandos recibidos, no hace polling ni programa tareas.\n');
     stdout.write('  mycompany capabilities\n');
     stdout.write('    Comprueba localmente qué adaptadores están instalados en la carpeta de empresa. No ejecuta los adaptadores.\n');
     stdout.write('    No conecta con MyCompanies ni Dev.to y no lee .env ni muestra credenciales.\n');

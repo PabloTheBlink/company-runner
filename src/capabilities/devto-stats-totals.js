@@ -26,13 +26,19 @@ export async function listLocalCapabilities(companyRoot) {
     }];
 }
 
-export async function runDevtoStatsTotals({ companyRoot, execFileImplementation = execFile } = {}) {
+export async function runDevtoStatsTotals({ companyRoot, timeoutMs = DEVTO_STATS_TOTALS_CAPABILITY.maxRuntimeMs, execFileImplementation = execFile } = {}) {
+    if (!Number.isInteger(timeoutMs)
+        || timeoutMs < 1
+        || timeoutMs > DEVTO_STATS_TOTALS_CAPABILITY.maxRuntimeMs) {
+        throw new Error('El límite de ejecución de la capacidad no es válido.');
+    }
+
     const resolvedCompanyRoot = await resolveCompanyRoot(companyRoot);
     if (resolvedCompanyRoot === null) {
         throw new Error('La capacidad Dev.to no está instalada en esta carpeta de empresa.');
     }
 
-    const output = await executeFixedScript(execFileImplementation, resolvedCompanyRoot);
+    const output = await executeFixedScript(execFileImplementation, resolvedCompanyRoot, timeoutMs);
     if (Buffer.byteLength(output, 'utf8') > DEVTO_STATS_TOTALS_CAPABILITY.maxOutputBytes) {
         throw new Error('La respuesta de Dev.to es demasiado grande.');
     }
@@ -70,7 +76,7 @@ async function resolveCompanyRoot(companyRoot) {
     return resolvedCompanyRoot;
 }
 
-function executeFixedScript(execFileImplementation, companyRoot) {
+function executeFixedScript(execFileImplementation, companyRoot, timeoutMs) {
     return new Promise((resolve, reject) => {
         const environment = {
             PATH: process.env.PATH ?? '',
@@ -91,7 +97,7 @@ function executeFixedScript(execFileImplementation, companyRoot) {
                     encoding: 'utf8',
                     maxBuffer: DEVTO_STATS_TOTALS_CAPABILITY.maxOutputBytes + 1,
                     shell: false,
-                    timeout: DEVTO_STATS_TOTALS_CAPABILITY.maxRuntimeMs,
+                    timeout: timeoutMs,
                     windowsHide: true,
                 },
                 (error, stdout) => {

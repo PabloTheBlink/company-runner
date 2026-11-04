@@ -39,6 +39,7 @@ test('Dev.to stats capability invokes only the fixed local read only operation a
         try {
             result = await runDevtoStatsTotals({
                 companyRoot,
+                timeoutMs: 90_000,
                 execFileImplementation(executable, args, options, callback) {
                     invocation = { executable, args, options };
                     callback(null, validOutput, 'progress output is discarded');
@@ -61,7 +62,7 @@ test('Dev.to stats capability invokes only the fixed local read only operation a
         assert.deepEqual(invocation.args, ['automations/devto/devto_stats.py', 'stats', 'totals']);
         assert.equal(invocation.options.cwd, companyRoot);
         assert.equal(invocation.options.shell, false);
-        assert.equal(invocation.options.timeout, DEVTO_STATS_TOTALS_CAPABILITY.maxRuntimeMs);
+        assert.equal(invocation.options.timeout, 90_000);
         assert.equal(invocation.options.maxBuffer, DEVTO_STATS_TOTALS_CAPABILITY.maxOutputBytes + 1);
         assert.equal(invocation.options.env.MYCOMPANY_TEST_SECRET, undefined);
         assert.equal(invocation.options.env.PYTHONIOENCODING, 'utf-8');

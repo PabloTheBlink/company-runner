@@ -1,10 +1,12 @@
 import { lstat, open, realpath, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve, sep } from 'node:path';
+import { DEVTO_STATS_TOTALS_CAPABILITY, listLocalCapabilities, runDevtoStatsTotals } from './capabilities/devto-stats-totals.js';
 const API_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const ENROLLMENT_CODE_PATTERN = /^[A-Za-z0-9]{64}$/;
 const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
+const MAX_EXECUTION_RESULT_BYTES = 65_536;
 const ARTIFACT_EXTENSIONS = new Set(['.md', '.txt', '.pdf']);
 
 export function normalizeServerUrl(serverUrl, allowInsecureLocalhost = false) {
@@ -50,9 +52,14 @@ export function formatAssignee(assignee) {
 }
 
 export class RunnerClient {
-    constructor(configStore, fetchImplementation = globalThis.fetch) {
+    constructor(configStore, fetchImplementation = globalThis.fetch, {
+        listLocalCapabilitiesImplementation = listLocalCapabilities,
+        runDevtoStatsTotalsImplementation = runDevtoStatsTotals,
+    } = {}) {
         this.configStore = configStore;
         this.fetch = fetchImplementation;
+        this.listLocalCapabilities = listLocalCapabilitiesImplementation;
+        this.runDevtoStatsTotals = runDevtoStatsTotalsImplementation;
     }
 
     async enroll(serverUrl, code, companyRootPath = process.cwd(), allowInsecureLocalhost = false) {
@@ -170,6 +177,107 @@ export class RunnerClient {
         return {
             workspace_name: claim.body.workspace.name,
             workspace_accessible: workspaceAccessible,
+        };
+    }
+
+    async executeOnce(currentDirectory = process.cwd()) {
+        const configuration = await this.configStore.loadForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const localCapabilities = await this.listLocalCapabilities(configuration.workspace_path);
+        const hasDevtoCapability = localCapabilities.some((capability) => capability.name === DEVTO_STATS_TOTALS_CAPABILITY.name
+            && capability.version === DEVTO_STATS_TOTALS_CAPABILITY.version);
+        if (!hasDevtoCapability) {
+            throw new Error('La capacidad devto.stats.totals@1.0.0 no está instalada en esta carpeta de empresa.');
+        }
+
+        const claim = await this.postJson(
+            `${serverUrl}/api/v1/runner/executions/claim`,
+            { capabilities: [{ name: DEVTO_STATS_TOTALS_CAPABILITY.name, version: DEVTO_STATS_TOTALS_CAPABILITY.version }] },
+            configuration.api_token,
+        );
+        if (claim.status === 204) return null;
+        if (claim.status === 401) {
+            throw new Error('La credencial Runner fue rechazada (HTTP 401). Comprueba si fue revocada.');
+        }
+        if (claim.status !== 200
+            || !Number.isSafeInteger(claim.body.id)
+            || claim.body.id < 1
+            || claim.body.capability !== DEVTO_STATS_TOTALS_CAPABILITY.name
+            || claim.body.capability_version !== DEVTO_STATS_TOTALS_CAPABILITY.version
+            || !Array.isArray(claim.body.parameters)
+            || claim.body.parameters.length !== 0
+            || typeof claim.body.lease_token !== 'string'
+            || !API_TOKEN_PATTERN.test(claim.body.lease_token)) {
+            throw new Error('MyCompanies devolvió una autorización de ejecución no válida.');
+        }
+
+        const executionPath = `${serverUrl}/api/v1/runner/executions/${claim.body.id}`;
+        const start = await this.postJson(
+            `${executionPath}/start`,
+            { lease_token: claim.body.lease_token },
+            configuration.api_token,
+        );
+        const runtimeDeadline = Date.parse(start.body.runtime_deadline_at);
+        if (start.status !== 200
+            || start.body.status !== 'running'
+            || !Number.isFinite(runtimeDeadline)
+            || runtimeDeadline <= Date.now()) {
+            throw new Error('La ejecución no se inició; el adaptador local no se ejecutó.');
+        }
+
+        const timeoutMs = Math.min(
+            DEVTO_STATS_TOTALS_CAPABILITY.maxRuntimeMs,
+            runtimeDeadline - Date.now() - 1_000,
+        );
+        if (timeoutMs <= 0) {
+            throw new Error('El plazo de ejecución ya venció; el adaptador local no se ejecutó.');
+        }
+
+        let localResult;
+        let outcome = 'succeeded';
+        let resultPayload;
+        try {
+            localResult = await this.runDevtoStatsTotals({
+                companyRoot: configuration.workspace_path,
+                timeoutMs,
+            });
+            const successPayload = {
+                lease_token: claim.body.lease_token,
+                outcome: 'succeeded',
+                result: localResult,
+            };
+            if (!isValidDevtoStatsResult(localResult)
+                || Buffer.byteLength(JSON.stringify(successPayload), 'utf8') > MAX_EXECUTION_RESULT_BYTES) {
+                outcome = 'failed';
+                resultPayload = { failure_code: 'invalid_local_result' };
+            } else {
+                resultPayload = { result: localResult };
+            }
+        } catch {
+            outcome = 'failed';
+            resultPayload = { failure_code: 'capability_failed' };
+        }
+
+        const result = await this.postJson(
+            `${executionPath}/result`,
+            {
+                lease_token: claim.body.lease_token,
+                outcome,
+                ...resultPayload,
+            },
+            configuration.api_token,
+        );
+        if (result.status !== 200
+            || result.body.status !== outcome
+            || typeof result.body.result_hash !== 'string'
+            || !/^[a-f0-9]{64}$/.test(result.body.result_hash)
+            || typeof result.body.replayed !== 'boolean') {
+            throw new Error('MyCompanies no aceptó el resultado; el intento puede requerir revisión.');
+        }
+
+        return {
+            outcome,
+            article_count: outcome === 'succeeded' ? localResult.articles.length : 0,
         };
     }
 
@@ -2048,6 +2156,31 @@ function isCreatedAgentTask(task) {
                 && Number.isInteger(task.workspace.id)
                 && task.workspace.id > 0
                 && typeof task.workspace.name === 'string'));
+}
+
+function isValidDevtoStatsResult(result) {
+    return result !== null
+        && typeof result === 'object'
+        && !Array.isArray(result)
+        && Object.keys(result).sort().join(',') === 'articles,scope,source'
+        && result.source === 'Dev.to analytics'
+        && result.scope === 'lifetime totals'
+        && Array.isArray(result.articles)
+        && result.articles.length <= 500
+        && result.articles.every((article) => article !== null
+            && typeof article === 'object'
+            && !Array.isArray(article)
+            && Object.keys(article).sort().join(',') === 'id,metrics'
+            && Number.isSafeInteger(article.id)
+            && article.id > 0
+            && article.metrics !== null
+            && typeof article.metrics === 'object'
+            && !Array.isArray(article.metrics)
+            && Object.keys(article.metrics).length <= 50
+            && Object.entries(article.metrics).every(([name, value]) => /^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(name)
+                && typeof value === 'number'
+                && Number.isFinite(value)
+                && value >= 0));
 }
 
 async function readResponseLimited(response, maximumBytes) {

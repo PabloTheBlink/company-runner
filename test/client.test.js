@@ -1556,6 +1556,239 @@ test('workspace check rejects unknown capabilities without running or reporting 
     });
 });
 
+test('manual execution claims, starts, runs only the fixed adapter, and submits its filtered result', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const runnerToken = 'T'.repeat(80);
+        const leaseToken = 'L'.repeat(80);
+        const result = {
+            source: 'Dev.to analytics',
+            scope: 'lifetime totals',
+            articles: [{ id: 123, metrics: { views: 45 } }],
+        };
+        let adapterCalls = 0;
+        const calls = [];
+        const server = createServer(async (request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${runnerToken}`);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            calls.push({ url: request.url, body: body === '' ? null : JSON.parse(body) });
+
+            if (request.url === '/api/v1/runner/executions/claim') {
+                assert.deepEqual(JSON.parse(body), { capabilities: [{ name: 'devto.stats.totals', version: '1.0.0' }] });
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    id: 31,
+                    capability: 'devto.stats.totals',
+                    capability_version: '1.0.0',
+                    parameters: [],
+                    lease_token: leaseToken,
+                }));
+                return;
+            }
+            if (request.url === '/api/v1/runner/executions/31/start') {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    status: 'running',
+                    runtime_deadline_at: new Date(Date.now() + 120_000).toISOString(),
+                }));
+                return;
+            }
+            if (request.url === '/api/v1/runner/executions/31/result') {
+                assert.equal(JSON.parse(body).outcome, 'succeeded');
+                assert.deepEqual(JSON.parse(body).result, result);
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ status: 'succeeded', result_hash: 'a'.repeat(64), replayed: false }));
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: runnerToken,
+        });
+
+        try {
+            const client = new RunnerClient(configStore, globalThis.fetch, {
+                listLocalCapabilitiesImplementation: async () => [{ name: 'devto.stats.totals', version: '1.0.0' }],
+                runDevtoStatsTotalsImplementation: async ({ companyRoot: receivedRoot }) => {
+                    adapterCalls++;
+                    assert.equal(receivedRoot, companyRoot);
+                    return result;
+                },
+            });
+
+            assert.deepEqual(await client.executeOnce(companyRoot), { outcome: 'succeeded', article_count: 1 });
+            assert.equal(adapterCalls, 1);
+            assert.deepEqual(calls.map(({ url }) => url), [
+                '/api/v1/runner/executions/claim',
+                '/api/v1/runner/executions/31/start',
+                '/api/v1/runner/executions/31/result',
+            ]);
+            assert.deepEqual(calls[1].body, { lease_token: leaseToken });
+            assert.equal(JSON.stringify(calls).includes(companyRoot), false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('manual execution never runs the adapter before a successful start and returns no work cleanly', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const calls = [];
+        let adapterCalls = 0;
+        const server = createServer(async (request, response) => {
+            calls.push(request.url);
+            if (request.url.endsWith('/claim')) {
+                if (calls.filter((url) => url.endsWith('/claim')).length === 1) {
+                    response.writeHead(204);
+                    response.end();
+                    return;
+                }
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    id: 32,
+                    capability: 'devto.stats.totals',
+                    capability_version: '1.0.0',
+                    parameters: [],
+                    lease_token: 'L'.repeat(80),
+                }));
+                return;
+            }
+            response.writeHead(409, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ message: 'Execution lease is no longer valid.' }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: 'T'.repeat(80),
+        });
+        const client = new RunnerClient(configStore, globalThis.fetch, {
+            listLocalCapabilitiesImplementation: async () => [{ name: 'devto.stats.totals', version: '1.0.0' }],
+            runDevtoStatsTotalsImplementation: async () => {
+                adapterCalls++;
+                return { source: 'Dev.to analytics', scope: 'lifetime totals', articles: [] };
+            },
+        });
+
+        try {
+            assert.equal(await client.executeOnce(companyRoot), null);
+            assert.equal(calls.length, 1);
+            await assert.rejects(client.executeOnce(companyRoot), /no se inició/);
+            assert.deepEqual(calls.slice(1), [
+                '/api/v1/runner/executions/claim',
+                '/api/v1/runner/executions/32/start',
+            ]);
+            assert.equal(adapterCalls, 0);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('manual execution submits only an enumerated failure when the fixed adapter fails', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const calls = [];
+        const server = createServer(async (request, response) => {
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            calls.push({ url: request.url, body: body === '' ? null : JSON.parse(body) });
+            if (request.url.endsWith('/claim')) {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    id: 33,
+                    capability: 'devto.stats.totals',
+                    capability_version: '1.0.0',
+                    parameters: [],
+                    lease_token: 'L'.repeat(80),
+                }));
+                return;
+            }
+            if (request.url.endsWith('/start')) {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    status: 'running',
+                    runtime_deadline_at: new Date(Date.now() + 120_000).toISOString(),
+                }));
+                return;
+            }
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ status: 'failed', result_hash: 'b'.repeat(64), replayed: false }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: 'T'.repeat(80),
+        });
+
+        try {
+            const client = new RunnerClient(configStore, globalThis.fetch, {
+                listLocalCapabilitiesImplementation: async () => [{ name: 'devto.stats.totals', version: '1.0.0' }],
+                runDevtoStatsTotalsImplementation: async () => {
+                    throw new Error('secret and process output must never be submitted');
+                },
+            });
+
+            assert.deepEqual(await client.executeOnce(companyRoot), { outcome: 'failed', article_count: 0 });
+            assert.deepEqual(calls[2].body, {
+                lease_token: 'L'.repeat(80),
+                outcome: 'failed',
+                failure_code: 'capability_failed',
+            });
+            assert.equal(JSON.stringify(calls[2]).includes('secret'), false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('manual execution does not claim work when the exact local capability is unavailable', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        await configStore.saveNew({
+            server_url: 'https://mycompanies.example',
+            runner_id: 7,
+            workspace_path: companyRoot,
+            allow_insecure_localhost: false,
+            api_token: 'T'.repeat(80),
+        });
+        let networkCalls = 0;
+        const client = new RunnerClient(configStore, async () => {
+            networkCalls++;
+            throw new Error('network must not be called');
+        }, {
+            listLocalCapabilitiesImplementation: async () => [],
+        });
+
+        await assert.rejects(client.executeOnce(companyRoot), /no está instalada/);
+        assert.equal(networkCalls, 0);
+    });
+});
+
 test('task listing requests the authenticated runner tasks without sending local paths', async () => {
     await withTemporaryDirectory(async (directory) => {
         const workspacePath = path.join(directory, 'workspace');
