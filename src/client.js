@@ -299,6 +299,8 @@ export class RunnerClient {
             throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
         }
     }
+
+
 }
 
 export class AgentClient {
@@ -398,6 +400,74 @@ export class AgentClient {
         return response.body.task;
     }
 
+    async updateTaskStatus(taskId, status, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+        if (!['open', 'in_progress', 'completed', 'blocked', 'cancelled'].includes(status)) {
+            throw new Error('El estado no es válido.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.patchJson(`${serverUrl}/api/v1/agent/tasks/${taskId}/status`, { status }, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene el permiso tasks.manage para cambiar estados (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La tarea no existe o no está disponible para el ámbito de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó el cambio. Revisa dependencias y estado actual de la tarea (HTTP 422).');
+        }
+        if (response.status !== 200
+            || response.body.task?.id !== taskId
+            || response.body.task?.status !== status) {
+            throw new Error('MyCompanies devolvió una respuesta de cambio de estado Agent no válida.');
+        }
+        return response.body.task;
+    }
+
+    async patchJson(endpoint, payload, apiToken) {
+        let response;
+        try {
+            response = await this.fetch(endpoint, {
+                method: 'PATCH',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${apiToken}`,
+                },
+                body: JSON.stringify(payload),
+                redirect: 'manual',
+                signal: AbortSignal.timeout(10_000),
+            });
+        } catch {
+            throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
+        }
+        if (![200, 401, 403, 404, 422, 429].includes(response.status)) {
+            throw new Error(`MyCompanies devolvió un error HTTP ${response.status}.`);
+        }
+        if (response.status !== 200) return { status: response.status, body: {} };
+        let responseText;
+        try {
+            responseText = await readResponseLimited(response, MAX_RESPONSE_BYTES);
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta demasiado grande o no válida.');
+        }
+        try {
+            const body = JSON.parse(responseText);
+            if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid response shape.');
+            return { status: response.status, body };
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
+        }
+    }
     async requestIdentity(serverUrl, apiToken) {
         const response = await this.getJson(`${serverUrl}/api/v1/agent/me`, apiToken);
         if (response.status === 401) {

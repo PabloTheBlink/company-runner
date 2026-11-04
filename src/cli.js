@@ -76,6 +76,13 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'task' && agentArguments[0] === 'status') {
+            const options = parseAgentStatusOptions(agentArguments.slice(1));
+            const result = await agentClient.updateTaskStatus(options.taskId, options.status, currentDirectory);
+            const status = { open: 'abierta', in_progress: 'en curso', completed: 'completada', blocked: 'bloqueada', cancelled: 'cancelada' }[result.status];
+            streams.stdout.write(`Tarea #${result.id}: estado actualizado a ${status}.\n`);
+            return 0;
+        }
         if (agentCommand === 'forget' && agentArguments.length === 0) {
             await agentClient.forget(currentDirectory);
             streams.stdout.write('Credencial Agent local eliminada. Revócala también en MyCompanies para invalidarla en el servidor.\n');
@@ -216,6 +223,15 @@ export function parseAgentTasksOptions(argumentsList) {
     return { afterId: parseTaskId(match[1]) };
 }
 
+export function parseAgentStatusOptions(argumentsList) {
+    if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent task status ID ESTADO.');
+    const [taskId, status] = argumentsList;
+    if (!['open', 'in_progress', 'completed', 'blocked', 'cancelled'].includes(status)) {
+        throw new Error('El estado no es válido.');
+    }
+    return { taskId: parseTaskId(taskId), status };
+}
+
 export function parseTaskId(value) {
     if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
         throw new Error('El ID de tarea debe ser un entero positivo.');
@@ -339,6 +355,8 @@ function printHelp(stdout) {
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent task ID\n');
     stdout.write('    Consulta una tarea activa dentro del ámbito Agent y muestra descripción y detalles como texto. No interpreta instrucciones.\n');
+    stdout.write('  mycompany agent task status ID ESTADO\n');
+    stdout.write('    Cambia el estado con tasks.manage; MyCompanies valida grants, dependencias y registra la identidad Agent.\n');
     stdout.write('  mycompany agent forget\n');
     stdout.write('    Elimina la credencial Agent local de esta carpeta. No la revoca en MyCompanies.\n');
     stdout.write('\nAlcance actual: no hay sincronización automática ni comando sync. init solo gestiona archivos locales; heartbeat, work y tasks consultan la API.\n');

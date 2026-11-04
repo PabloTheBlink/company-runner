@@ -221,6 +221,47 @@ test('agent task detail retrieves only the requested task and accepts a company-
     });
 });
 
+test('agent status update sends the explicit status to the scoped Agent endpoint', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'PATCH');
+            assert.equal(request.url, '/api/v1/agent/tasks/26/status');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            let requestBody = '';
+            for await (const chunk of request) requestBody += chunk;
+            assert.deepEqual(JSON.parse(requestBody), { status: 'in_progress' });
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ task: { id: 26, status: 'in_progress' } }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            assert.deepEqual(await new AgentClient(configStore).updateTaskStatus(26, 'in_progress', companyRoot), {
+                id: 26,
+                status: 'in_progress',
+            });
+            await assert.rejects(new AgentClient(configStore).updateTaskStatus(26, 'unknown', companyRoot), /estado no es válido/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('heartbeat does not follow redirects or expose the token in errors', async () => {
     await withTemporaryDirectory(async (directory) => {
         const workspacePath = path.join(directory, 'workspace');

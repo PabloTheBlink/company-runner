@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentLoginOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentLoginOptions, parseAgentStatusOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -49,6 +49,13 @@ test('agent task listing accepts a single positive cursor', () => {
     assert.throws(() => parseAgentTasksOptions(['--after=25', '--after=50']), /Opción desconocida/);
 });
 
+test('agent status command requires a task ID and supported target status', () => {
+    assert.deepEqual(parseAgentStatusOptions(['26', 'in_progress']), { taskId: 26, status: 'in_progress' });
+    assert.deepEqual(parseAgentStatusOptions(['26', 'completed']), { taskId: 26, status: 'completed' });
+    assert.throws(() => parseAgentStatusOptions(['26']), /Uso:/);
+    assert.throws(() => parseAgentStatusOptions(['26', 'unknown']), /estado no es válido/);
+});
+
 test('the executable command is named mycompany and help uses that name', async () => {
     const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
     const packageConfiguration = JSON.parse(await readFile(packagePath, 'utf8'));
@@ -65,6 +72,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent me/);
     assert.match(output.value, /mycompany agent tasks/);
     assert.match(output.value, /mycompany agent task ID/);
+    assert.match(output.value, /mycompany agent task status ID ESTADO/);
     assert.match(output.value, /no hay sincronización automática/);
     assert.match(output.value, /no se crea una carpeta por Workspace/);
     assert.match(output.value, /no conecta con el servidor/);
