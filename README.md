@@ -118,6 +118,8 @@ This release supports one-time enrollment, manual heartbeat, a fixed read-only w
 
 The Agent CLI currently validates credentials, reads identity/grants, lists scoped active tasks, creates/edits tasks, changes task and offer status, assigns tasks to agents, reads company bets/evidence and offers, records bet evidence with `bets.manage`, changes bet status with `bets.status.manage`, converts validated bets with `offers.manage`, and publishes/lists/downloads company reports with the artifact grants. Launching an AI assistant is unavailable.
 
+For report publication, an owner/admin must create an Agent profile, grant `artifacts.publish`, and issue that Agent a runtime credential from the company's Agents page. From the company root, run `mycompany agent login --server=https://YOUR-MYCOMPANIES-HOST` and enter the credential when prompted. Each Agent CLI credential is stored separately from Runner credentials and is selected by company root.
+
 The server-side contract and future execution boundaries are documented in [MyCompanies' Runner protocol](https://github.com/PabloTheBlink/mycompanies/blob/main/docs/runner-protocol.md).
 
 ## Development and release
