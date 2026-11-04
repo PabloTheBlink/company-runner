@@ -1,0 +1,27 @@
+{
+  "name": "mycompanies-runner",
+  "version": "0.1.0",
+  "description": "Independent CLI client for MyCompanies Runner",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PabloTheBlink/company-runner.git"
+  },
+  "homepage": "https://github.com/PabloTheBlink/company-runner#readme",
+  "bugs": {
+    "url": "https://github.com/PabloTheBlink/company-runner/issues"
+  },
+  "type": "module",
+  "bin": {
+    "company-runner": "./src/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "src/"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}

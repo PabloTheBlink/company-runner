@@ -1,0 +1,193 @@
+import { realpath, readdir, stat } from 'node:fs/promises';
+const API_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
+const ENROLLMENT_CODE_PATTERN = /^[A-Za-z0-9]{64}$/;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+
+export function normalizeServerUrl(serverUrl, allowInsecureLocalhost = false) {
+    if (typeof serverUrl !== 'string' || serverUrl.trim() !== serverUrl || /[\r\n\0\t ]/.test(serverUrl)) {
+        throw new Error('La URL del servidor no es válida.');
+    }
+
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(serverUrl);
+    } catch {
+        throw new Error('La URL del servidor no es válida.');
+    }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)
+        || parsedUrl.username !== ''
+        || parsedUrl.password !== ''
+        || parsedUrl.pathname !== '/'
+        || parsedUrl.search !== ''
+        || parsedUrl.hash !== '') {
+        throw new Error('Indica la URL base del servidor, sin credenciales, ruta ni parámetros.');
+    }
+
+    if (parsedUrl.protocol === 'https:') {
+        return parsedUrl.origin;
+    }
+
+    const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const isLoopback = ['localhost', '127.0.0.1', '::1'].includes(hostname);
+    if (!allowInsecureLocalhost || !isLoopback) {
+        throw new Error('Usa HTTPS. HTTP solo se permite con autorización explícita en loopback.');
+    }
+
+    return parsedUrl.origin;
+}
+
+export class RunnerClient {
+    constructor(configStore, fetchImplementation = globalThis.fetch) {
+        this.configStore = configStore;
+        this.fetch = fetchImplementation;
+    }
+
+    async enroll(serverUrl, code, workspacePath, allowInsecureLocalhost = false) {
+        const normalizedServerUrl = normalizeServerUrl(serverUrl, allowInsecureLocalhost);
+        if (!ENROLLMENT_CODE_PATTERN.test(code)) {
+            throw new Error('El código de alta debe contener 64 caracteres alfanuméricos.');
+        }
+        const resolvedWorkspacePath = await validateWorkspacePath(workspacePath);
+        await this.configStore.assertAvailable();
+
+        const { status, body } = await this.postJson(
+            `${normalizedServerUrl}/api/v1/runner/enrollments/exchange`,
+            { code },
+        );
+        if (status !== 201
+            || !Number.isInteger(body.runner_id)
+            || body.runner_id < 1
+            || typeof body.api_token !== 'string'
+            || !API_TOKEN_PATTERN.test(body.api_token)) {
+            throw enrollmentError(status);
+        }
+
+        await this.configStore.saveNew({
+            server_url: normalizedServerUrl,
+            runner_id: body.runner_id,
+            workspace_path: resolvedWorkspacePath,
+            allow_insecure_localhost: allowInsecureLocalhost,
+            api_token: body.api_token,
+        });
+
+        return body.runner_id;
+    }
+
+    async heartbeat() {
+        const configuration = await this.configStore.load();
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        try {
+            await validateWorkspacePath(configuration.workspace_path);
+        } catch {
+            throw new Error('La ruta local del workspace no está disponible; no se envió el heartbeat.');
+        }
+
+        const { status, body } = await this.postJson(
+            `${serverUrl}/api/v1/runner/heartbeat`,
+            {},
+            configuration.api_token,
+        );
+        if (status === 401) {
+            throw new Error('La credencial Runner fue rechazada (HTTP 401). Comprueba si fue revocada.');
+        }
+        if (status !== 200
+            || body.runner_id !== configuration.runner_id
+            || body.status !== 'online'
+            || typeof body.last_seen_at !== 'string'
+            || !Array.isArray(body.workspaces)
+            || body.workspaces.some((workspace) => workspace === null
+                || typeof workspace !== 'object'
+                || !Number.isInteger(workspace.id)
+                || typeof workspace.name !== 'string')) {
+            throw new Error('MyCompanies devolvió una respuesta de heartbeat no válida.');
+        }
+
+        return body;
+    }
+
+    async postJson(endpoint, payload, apiToken = '') {
+        let response;
+        try {
+            response = await this.fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    ...(apiToken === '' ? {} : { Authorization: `Bearer ${apiToken}` }),
+                },
+                body: JSON.stringify(payload),
+                redirect: 'manual',
+                signal: AbortSignal.timeout(10_000),
+            });
+        } catch {
+            throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
+        }
+
+        if (response.status === 401 || response.status === 404 || response.status === 429 || response.status >= 300) {
+            return { status: response.status, body: {} };
+        }
+
+        let responseText;
+        try {
+            responseText = await readResponseLimited(response, MAX_RESPONSE_BYTES);
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta demasiado grande o no válida.');
+        }
+        try {
+            const body = JSON.parse(responseText);
+            if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+                throw new Error('Invalid response shape.');
+            }
+            return { status: response.status, body };
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
+        }
+    }
+}
+
+async function readResponseLimited(response, maximumBytes) {
+    const reader = response.body?.getReader();
+    if (!reader) return '';
+
+    const chunks = [];
+    let totalBytes = 0;
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > maximumBytes) {
+            await reader.cancel();
+            throw new Error('Response exceeded size limit.');
+        }
+        chunks.push(value);
+    }
+
+    const combined = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(combined);
+}
+
+async function validateWorkspacePath(workspacePath) {
+    try {
+        const resolvedPath = await realpath(workspacePath);
+        if (!(await stat(resolvedPath)).isDirectory()) throw new Error('Not a directory.');
+        await readdir(resolvedPath);
+        return resolvedPath;
+    } catch {
+        throw new Error('La ruta del workspace debe existir y poder leerse.');
+    }
+}
+
+function enrollmentError(status) {
+    if (status === 404) {
+        return new Error('El código de alta no existe, caducó o ya se utilizó (HTTP 404).');
+    }
+    if (status === 429) {
+        return new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+    }
+    return new Error('No se pudo completar el alta en MyCompanies.');
+}
