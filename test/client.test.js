@@ -2165,3 +2165,97 @@ test('Agent credential listing returns active and revoked metadata without reque
         }
     });
 });
+
+test('Agent memory client lists only authorized topics, reads scoped entries, and adds attributed knowledge', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const node = {
+            id: 81,
+            topic: { id: 7, name: 'Mercado' },
+            workspace: { id: 3, name: 'Marketing' },
+            kind: 'observation',
+            title: 'Sube el interés',
+            content: 'Tres consultas públicas nuevas.',
+            source_type: 'url',
+            source_reference: 'https://example.test/source',
+            created_by: { type: 'agent', id: 12, name: 'Vera' },
+            created_at: '2026-11-04T10:00:00Z',
+        };
+        const server = createServer(async (request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            if (request.method === 'GET' && request.url === '/api/v1/agent/memory/topics') {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ topics: [{
+                    id: 7, name: 'Mercado', can_read: true, can_write: true,
+                    company_read: false, company_write: false,
+                    workspace_read_ids: [3], workspace_write_ids: [3],
+                }] }));
+                return;
+            }
+            if (request.method === 'GET' && request.url === '/api/v1/agent/memory?topic_id=7&workspace_id=3&after_id=80') {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ memory: [node], has_more: false, next_after: null }));
+                return;
+            }
+            if (request.method === 'GET' && request.url === '/api/v1/agent/memory/81') {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ memory: node }));
+                return;
+            }
+            if (request.method === 'POST' && request.url === '/api/v1/agent/memory') {
+                let body = '';
+                for await (const chunk of request) body += chunk;
+                assert.deepEqual(JSON.parse(body), {
+                    memory_topic_id: 7,
+                    workspace_id: 3,
+                    kind: 'observation',
+                    title: 'Sube el interés',
+                    content: 'Tres consultas públicas nuevas.',
+                    source_type: 'url',
+                    source_reference: 'https://example.test/source',
+                });
+                response.writeHead(201, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ memory: node }));
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl, agent_id: 12, agent_name: 'Vera', company_id: 4,
+            company_name: 'Devetty', company_root_path: companyRoot,
+            allow_insecure_localhost: true, api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            assert.deepEqual(await client.listMemoryTopics(companyRoot), { topics: [{
+                id: 7, name: 'Mercado', can_read: true, can_write: true,
+                company_read: false, company_write: false,
+                workspace_read_ids: [3], workspace_write_ids: [3],
+            }] });
+            const list = await client.listMemory({ topicId: 7, workspaceId: 3, afterId: 80 }, companyRoot);
+            assert.equal(list.memory[0].title, 'Sube el interés');
+            assert.equal((await client.getMemory(81, companyRoot)).memory.content, node.content);
+            assert.equal((await client.addMemory({
+                topicId: 7,
+                workspaceId: 3,
+                kind: 'observation',
+                title: node.title,
+                content: node.content,
+                sourceType: 'url',
+                sourceReference: node.source_reference,
+            }, companyRoot)).memory.id, 81);
+            await assert.rejects(client.listMemory({ topicId: 0 }, companyRoot), /tema.*entero positivo/i);
+            await assert.rejects(client.getMemory(0, companyRoot), /entero positivo/);
+            await assert.rejects(client.addMemory({ topicId: 7, kind: 'fact', title: 'x', content: 'y' }, companyRoot), /tipo de conocimiento/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});

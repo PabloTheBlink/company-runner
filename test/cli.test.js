@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 import { listLocalAgentRuntimes } from '../src/runtime.js';
@@ -1118,6 +1118,59 @@ test('agent tasks command requests and labels only the selected active status', 
         else process.env.MYCOMPANY_AGENT_ID = previousAgentId;
         await rm(directory, { recursive: true, force: true });
     }
+});
+
+test('agent memory CLI lists company topics and hides unauthorized topics', async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-memory-test-'));
+    const companyRoot = path.join(directory, 'company');
+    const configHome = path.join(directory, 'config');
+    const previousConfigHome = process.env.XDG_CONFIG_HOME;
+    const previousAgentId = process.env.MYCOMPANY_AGENT_ID;
+    await mkdir(companyRoot, { recursive: true });
+    const token = 'M'.repeat(80);
+    const server = createServer((request, response) => {
+        assert.equal(request.url, '/api/v1/agent/memory/topics');
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ topics: [{
+            id: 7, name: 'Mercado', can_read: true, can_write: false,
+            company_read: false, company_write: false,
+            workspace_read_ids: [3], workspace_write_ids: [],
+        }] }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const configStore = new ConfigStore(path.join(configHome, 'mycompanies', 'runner.json'));
+    await configStore.saveAgent({
+        server_url: `http://127.0.0.1:${server.address().port}`, agent_id: 12, agent_name: 'Vera',
+        company_id: 4, company_name: 'Devetty', company_root_path: companyRoot,
+        allow_insecure_localhost: true, api_token: token,
+    });
+    process.env.XDG_CONFIG_HOME = configHome;
+    delete process.env.MYCOMPANY_AGENT_ID;
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+    try {
+        assert.equal(await run(['agent', 'memory', 'topics'], { stdout }, companyRoot, configStore), 0);
+        assert.match(stdout.value, /#7 Mercado/);
+        assert.match(stdout.value, /lectura workspaces 3/);
+    } finally {
+        server.close();
+        await once(server, 'close');
+        if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previousConfigHome;
+        if (previousAgentId === undefined) delete process.env.MYCOMPANY_AGENT_ID;
+        else process.env.MYCOMPANY_AGENT_ID = previousAgentId;
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('agent memory CLI validates filters, entries and source URLs', () => {
+    assert.deepEqual(parseAgentMemoryOptions('list', ['--topic=7', '--workspace=3', '--after=80']), { topicId: 7, workspaceId: 3, afterId: 80 });
+    assert.deepEqual(parseAgentMemoryOptions('show', ['81']), { memoryId: 81 });
+    assert.throws(() => parseAgentMemoryOptions('list', ['--topic=0']), /positivo/);
+    assert.throws(() => parseAgentMemoryOptions('topics', ['unexpected']), /Uso/);
+    assert.throws(() => parseAgentMemoryOptions('add', ['--topic=7', '--kind=observation', '--title=t', '--content=c', '--source-type=url']), /HTTP o HTTPS/);
+    assert.equal(parseAgentMemoryOptions('add', ['--topic=7', '--kind=hypothesis', '--title=Hipótesis', '--content=Texto', '--source-type=url', '--source-reference=https://example.test']).entry.topicId, 7);
 });
 
 test('init prepares the selected company root without Runner enrollment', async () => {

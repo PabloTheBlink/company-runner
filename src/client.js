@@ -758,6 +758,121 @@ export class AgentClient {
         return { outputPath: targetPath };
     }
 
+    async listMemoryTopics(currentDirectory = process.cwd()) {
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/memory/topics`, configuration.api_token);
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        if (response.status === 403) throw new Error('El agente no tiene permisos de memoria vigentes (HTTP 403).');
+        if (response.status === 429) throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        if (response.status !== 200
+            || !Array.isArray(response.body.topics)
+            || response.body.topics.length > 500
+            || response.body.topics.some((topic) => !isMemoryTopic(topic))) {
+            throw new Error('MyCompanies devolvió un catálogo de temas de memoria no válido.');
+        }
+        return response.body;
+    }
+
+    async listMemory(options = {}, currentDirectory = process.cwd()) {
+        if (options === null || typeof options !== 'object' || Array.isArray(options)
+            || Object.keys(options).some((key) => !['topicId', 'workspaceId', 'afterId'].includes(key))) {
+            throw new Error('Las opciones de memoria no son válidas.');
+        }
+        validateOptionalPositiveId(options.topicId, 'tema');
+        validateOptionalPositiveId(options.workspaceId, 'Workspace');
+        validateOptionalPositiveId(options.afterId, 'cursor de memoria');
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const query = new URLSearchParams();
+        if (options.topicId !== undefined) query.set('topic_id', String(options.topicId));
+        if (options.workspaceId !== undefined) query.set('workspace_id', String(options.workspaceId));
+        if (options.afterId !== undefined) query.set('after_id', String(options.afterId));
+        const queryString = query.size === 0 ? '' : `?${query.toString()}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/memory${queryString}`, configuration.api_token);
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        if (response.status === 403) throw new Error('El agente no tiene memory.read para ese ámbito de empresa, Workspace o tema (HTTP 403).');
+        if (response.status === 422) throw new Error('MyCompanies rechazó el tema, Workspace o cursor solicitado (HTTP 422).');
+        if (response.status === 429) throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        if (response.status !== 200
+            || !Array.isArray(response.body.memory)
+            || response.body.memory.length > 100
+            || response.body.memory.some((node) => !isMemoryNode(node))
+            || typeof response.body.has_more !== 'boolean'
+            || (response.body.has_more
+                ? !Number.isSafeInteger(response.body.next_after)
+                    || response.body.memory.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
+            throw new Error('MyCompanies devolvió una lista de memoria no válida.');
+        }
+        return response.body;
+    }
+
+    async getMemory(memoryId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(memoryId) || memoryId < 1) throw new Error('El ID de memoria debe ser un entero positivo.');
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/memory/${memoryId}`, configuration.api_token);
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        if (response.status === 403) throw new Error('El agente no tiene memory.read para el tema y Workspace de esta entrada (HTTP 403).');
+        if (response.status === 404) throw new Error('La entrada no existe o no pertenece a esta empresa.');
+        if (response.status === 429) throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        if (response.status !== 200 || !isMemoryNode(response.body.memory)) {
+            throw new Error('MyCompanies devolvió una entrada de memoria no válida.');
+        }
+        return response.body;
+    }
+
+    async addMemory(entry, currentDirectory = process.cwd()) {
+        if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('La entrada de memoria no es válida.');
+        validateOptionalPositiveId(entry.topicId, 'tema', true);
+        validateOptionalPositiveId(entry.workspaceId, 'Workspace');
+        if (!['observation', 'hypothesis', 'decision', 'assertion'].includes(entry.kind)) throw new Error('El tipo de conocimiento no es válido.');
+        if (typeof entry.title !== 'string' || entry.title.trim() === '' || entry.title.length > 180
+            || typeof entry.content !== 'string' || entry.content.trim() === '' || entry.content.length > 20_000) {
+            throw new Error('El título y el contenido son obligatorios y deben respetar sus límites de tamaño.');
+        }
+        const sourceType = entry.sourceType ?? 'manual';
+        if (!['manual', 'url', 'artifact', 'task', 'execution', 'conversation', 'other'].includes(sourceType)) {
+            throw new Error('El tipo de procedencia no es válido.');
+        }
+        if (entry.sourceReference !== undefined && entry.sourceReference !== null
+            && (typeof entry.sourceReference !== 'string' || entry.sourceReference.length > 2048)) {
+            throw new Error('La referencia de procedencia no es válida.');
+        }
+        if (sourceType === 'url') {
+            let sourceUrl;
+            try {
+                sourceUrl = new URL(entry.sourceReference);
+            } catch {
+                throw new Error('La procedencia URL requiere una dirección HTTP o HTTPS válida.');
+            }
+            if (!['http:', 'https:'].includes(sourceUrl.protocol)) throw new Error('La procedencia URL requiere una dirección HTTP o HTTPS válida.');
+        }
+
+        const payload = {
+            memory_topic_id: entry.topicId,
+            kind: entry.kind,
+            title: entry.title.trim(),
+            content: entry.content,
+            source_type: sourceType,
+        };
+        if (entry.workspaceId !== undefined) payload.workspace_id = entry.workspaceId;
+        if (entry.sourceReference !== undefined && entry.sourceReference !== null) payload.source_reference = entry.sourceReference;
+
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(`${serverUrl}/api/v1/agent/memory`, payload, configuration.api_token);
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        if (response.status === 403) throw new Error('El agente no tiene memory.write para ese ámbito de empresa, Workspace o tema (HTTP 403).');
+        if (response.status === 422) throw new Error('MyCompanies rechazó la entrada. Comprueba tema, Workspace, tipo y referencia (HTTP 422).');
+        if (response.status === 429) throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        if (response.status !== 201 || !isMemoryNode(response.body.memory)) {
+            throw new Error('MyCompanies devolvió una confirmación de escritura de memoria no válida.');
+        }
+        return response.body;
+    }
+
     async listTasks(currentDirectory = process.cwd(), afterId = null, status = null) {
         if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
             throw new Error('El cursor de tareas debe ser un entero positivo.');
@@ -2051,6 +2166,54 @@ function isArtifactSummary(artifact) {
                 && artifact.uploaded_by.type === 'agent'
                 && Number.isSafeInteger(artifact.uploaded_by.id)
                 && typeof artifact.uploaded_by.name === 'string'));
+}
+
+function validateOptionalPositiveId(value, label, required = false) {
+    if ((required && !Number.isSafeInteger(value))
+        || (value !== undefined && value !== null && (!Number.isSafeInteger(value) || value < 1))) {
+        throw new Error(`El ID de ${label} debe ser un entero positivo${required ? '' : ' si se indica'}.`);
+    }
+}
+
+function isMemoryTopic(topic) {
+    return topic !== null
+        && typeof topic === 'object'
+        && Number.isSafeInteger(topic.id)
+        && topic.id > 0
+        && typeof topic.name === 'string'
+        && typeof topic.can_read === 'boolean'
+        && typeof topic.can_write === 'boolean'
+        && typeof topic.company_read === 'boolean'
+        && typeof topic.company_write === 'boolean'
+        && Array.isArray(topic.workspace_read_ids)
+        && topic.workspace_read_ids.every((id) => Number.isSafeInteger(id) && id > 0)
+        && Array.isArray(topic.workspace_write_ids)
+        && topic.workspace_write_ids.every((id) => Number.isSafeInteger(id) && id > 0);
+}
+
+function isMemoryNode(node) {
+    return node !== null
+        && typeof node === 'object'
+        && Number.isSafeInteger(node.id)
+        && node.id > 0
+        && node.topic !== null
+        && typeof node.topic === 'object'
+        && Number.isSafeInteger(node.topic.id)
+        && typeof node.topic.name === 'string'
+        && (node.workspace === null || (typeof node.workspace === 'object'
+            && Number.isSafeInteger(node.workspace.id)
+            && typeof node.workspace.name === 'string'))
+        && ['observation', 'hypothesis', 'decision', 'assertion', 'synthesis'].includes(node.kind)
+        && typeof node.title === 'string'
+        && typeof node.content === 'string'
+        && typeof node.source_type === 'string'
+        && (node.source_reference === null || typeof node.source_reference === 'string')
+        && node.created_by !== null
+        && typeof node.created_by === 'object'
+        && ['user', 'agent'].includes(node.created_by.type)
+        && (node.created_by.id === null || Number.isSafeInteger(node.created_by.id))
+        && typeof node.created_by.name === 'string'
+        && typeof node.created_at === 'string';
 }
 
 function isPathInside(directoryPath, targetPath) {

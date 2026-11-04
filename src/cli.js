@@ -396,6 +396,47 @@ export async function run(
             }
             return 0;
         }
+        if (agentCommand === 'memory') {
+            const [memoryCommand, ...memoryArguments] = agentArguments;
+            const options = parseAgentMemoryOptions(memoryCommand, memoryArguments);
+            if (memoryCommand === 'topics') {
+                const result = await agentClient.listMemoryTopics(currentDirectory);
+                if (result.topics.length === 0) {
+                    streams.stdout.write('No hay temas de memoria accesibles para esta identidad.\n');
+                    return 0;
+                }
+                streams.stdout.write('Temas de memoria accesibles en esta empresa:\n');
+                for (const topic of result.topics) {
+                    const scopes = [];
+                    if (topic.company_read) scopes.push('lectura empresa');
+                    if (topic.company_write) scopes.push('escritura empresa');
+                    if (topic.workspace_read_ids.length > 0) scopes.push(`lectura workspaces ${topic.workspace_read_ids.join(',')}`);
+                    if (topic.workspace_write_ids.length > 0) scopes.push(`escritura workspaces ${topic.workspace_write_ids.join(',')}`);
+                    streams.stdout.write(`#${topic.id} ${safeTerminalText(topic.name)} · ${scopes.join(' · ') || 'sin alcance'}\n`);
+                }
+                return 0;
+            }
+            if (memoryCommand === 'list') {
+                const result = await agentClient.listMemory(options, currentDirectory);
+                if (result.memory.length === 0) {
+                    streams.stdout.write('No hay entradas de memoria legibles en este ámbito.\n');
+                    return 0;
+                }
+                for (const memory of result.memory) printMemoryNode(streams.stdout, memory);
+                if (result.has_more) streams.stdout.write(`Hay más entradas. Continúa con: mycompany agent memory list --after=${result.next_after}\n`);
+                return 0;
+            }
+            if (memoryCommand === 'show') {
+                const memory = await agentClient.getMemory(options.memoryId, currentDirectory);
+                printMemoryNode(streams.stdout, memory);
+                return 0;
+            }
+            if (memoryCommand === 'add') {
+                const memory = await agentClient.addMemory(options.entry, currentDirectory);
+                streams.stdout.write(`Entrada de memoria #${memory.id} añadida al tema #${memory.topic.id} ${safeTerminalText(memory.topic.name)}.\n`);
+                return 0;
+            }
+        }
         if (agentCommand === 'bets') {
             const options = parseAgentBetsOptions(agentArguments);
             const result = await agentClient.listBets(currentDirectory, options.afterId);
@@ -1005,6 +1046,46 @@ export function parseAgentBetsOptions(argumentsList) {
     return { afterId: parseTaskId(match[1]) };
 }
 
+export function parseAgentMemoryOptions(command, argumentsList) {
+    if (command === 'topics' && argumentsList.length === 0) return {};
+    if (command === 'list') {
+        const values = {};
+        for (const argument of argumentsList) {
+            const match = /^--(topic|workspace|after)=(.+)$/.exec(argument);
+            if (match === null || Object.hasOwn(values, match[1])) throw new Error('Uso: mycompany agent memory list [--topic=ID] [--workspace=ID] [--after=ID].');
+            values[match[1]] = parseTaskId(match[2]);
+        }
+        return { topicId: values.topic ?? null, workspaceId: values.workspace ?? null, afterId: values.after ?? null };
+    }
+    if (command === 'show' && argumentsList.length === 1) return { memoryId: parseTaskId(argumentsList[0]) };
+    if (command === 'add') {
+        const values = {};
+        for (const argument of argumentsList) {
+            const match = /^--(topic|workspace|kind|title|content|source-type|source-reference)=(.*)$/.exec(argument);
+            if (match === null || Object.hasOwn(values, match[1])) throw new Error('Uso: mycompany agent memory add --topic=ID --kind=TIPO --title=TÍTULO --content=TEXTO [--workspace=ID] [--source-type=TIPO] [--source-reference=REF].');
+            values[match[1]] = match[2];
+        }
+        if (!values.topic || !values.kind || !values.title?.trim() || !values.content?.trim()) throw new Error('Faltan campos obligatorios: --topic, --kind, --title y --content.');
+        if (!['observation', 'hypothesis', 'decision', 'assertion'].includes(values.kind)) throw new Error('El tipo debe ser observation, hypothesis, decision o assertion.');
+        if (values.workspace !== undefined) values.workspace = parseTaskId(values.workspace);
+        const sourceType = values['source-type'] ?? 'manual';
+        if (!['manual', 'url', 'artifact', 'task', 'execution', 'conversation', 'other'].includes(sourceType)) throw new Error('El tipo de origen no es válido.');
+        if (sourceType === 'url') {
+            try {
+                if (!['http:', 'https:'].includes(new URL(values['source-reference']).protocol)) throw new Error();
+            } catch {
+                throw new Error('El origen URL debe ser una dirección HTTP o HTTPS válida.');
+            }
+        }
+        return { entry: {
+            topicId: parseTaskId(values.topic), workspaceId: values.workspace ?? null,
+            kind: values.kind, title: values.title, content: values.content,
+            sourceType, sourceReference: values['source-reference'] ?? null,
+        } };
+    }
+    throw new Error('Uso: mycompany agent memory topics | list [filtros] | show ID | add --topic=ID --kind=TIPO --title=TÍTULO --content=TEXTO.');
+}
+
 export function parseAgentOffersOptions(argumentsList) {
     if (argumentsList.length === 0) return { afterId: null };
     if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent offers. Usa --after=ID.');
@@ -1544,6 +1625,10 @@ function printHelp(stdout) {
     stdout.write('    Lista solo metadatos, o emite/revoca una credencial de un reporte directo con agents.credentials.manage. La emisión guarda el secreto localmente sin mostrarlo.\n');
     stdout.write('  mycompany agent tasks [--status=open|in_progress|blocked] [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
+    stdout.write('  mycompany agent memory topics | list [--topic=ID] [--workspace=ID] [--after=ID] | show ID\n');
+    stdout.write('    Lee solo temas y entradas autorizados para esta identidad Agent; los temas pertenecen a una empresa.\n');
+    stdout.write('  mycompany agent memory add --topic=ID --kind=TIPO --title=TÍTULO --content=TEXTO [--workspace=ID] [--source-type=TIPO] [--source-reference=REF]\n');
+    stdout.write('    Añade conocimiento al tema si tiene memory.write. La API vuelve a comprobar empresa, tema y Workspace.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');
     stdout.write('    Lista apuestas de la empresa con bets.read o bets.manage. Solo muestra título y estado.\n');
     stdout.write('  mycompany agent offers [--after=ID]\n');
@@ -1606,6 +1691,14 @@ function printHelp(stdout) {
 
 function safeTerminalText(value) {
     return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
+}
+
+function printMemoryNode(stdout, memory) {
+    const workspace = memory.workspace === null ? 'Empresa' : `Workspace ${safeTerminalText(memory.workspace.name)}`;
+    const author = `${memory.created_by.type === 'agent' ? 'Agente' : 'Persona'} ${safeTerminalText(memory.created_by.name)}`;
+    stdout.write(`#${memory.id} [${memory.kind}] ${safeTerminalText(memory.title)} · tema ${safeTerminalText(memory.topic.name)} · ${workspace} · ${author}\n`);
+    stdout.write(`${safeTerminalText(memory.content)}\n`);
+    if (memory.source_reference !== null) stdout.write(`Origen (${safeTerminalText(memory.source_type)}): ${safeTerminalText(memory.source_reference)}\n`);
 }
 
 function taskStatusLabel(status) {
