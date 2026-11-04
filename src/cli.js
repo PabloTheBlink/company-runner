@@ -88,6 +88,16 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`Permisos vigentes: ${identity.permissions.length === 0 ? 'ninguno' : identity.permissions.map((permission) => `${safeTerminalText(permission.name)} (${permission.scope}${permission.workspace_name ? `: ${safeTerminalText(permission.workspace_name)}` : ''})`).join(', ')}\n`);
             return 0;
         }
+        if (agentCommand === 'permissions') {
+            parseAgentPermissionsOptions(agentArguments);
+            const result = await agentClient.listAgentPermissions(currentDirectory);
+            streams.stdout.write(`Capacidades disponibles (${result.permissions.length}):\n`);
+            for (const permission of result.permissions) {
+                const scope = permission.workspace_scope ? 'empresa o Workspace' : 'empresa';
+                streams.stdout.write(`${permission.name} · ${safeTerminalText(permission.label)} · alcance: ${scope}\n`);
+            }
+            return 0;
+        }
         if (agentCommand === 'tasks') {
             const options = parseAgentTasksOptions(agentArguments);
             const result = await agentClient.listTasks(currentDirectory, options.afterId);
@@ -599,6 +609,11 @@ export function parseAgentPermissionGrantOptions(argumentsList) {
     return { agentId, permission, workspaceId };
 }
 
+export function parseAgentPermissionsOptions(argumentsList) {
+    if (argumentsList.length !== 0) throw new Error('mycompany agent permissions no admite opciones.');
+    return {};
+}
+
 export function parseAgentPermissionRevokeOptions(argumentsList) {
     if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent permission revoke AGENT_ID GRANT_ID.');
     return { agentId: parseTaskId(argumentsList[0]), grantId: parseTaskId(argumentsList[1]) };
@@ -944,6 +959,8 @@ function printHelp(stdout) {
     stdout.write('    El servidor debe usar HTTPS; HTTP solo se permite para pruebas en localhost. La carpeta de empresa actual se asocia a la identidad.\n');
     stdout.write('  mycompany agent me\n');
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
+    stdout.write('  mycompany agent permissions\n');
+    stdout.write('    Consulta el catálogo vigente de capacidades y los alcances que admiten.\n');
     stdout.write('  mycompany agent tasks [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');

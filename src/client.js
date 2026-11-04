@@ -821,6 +821,31 @@ export class AgentClient {
         return response.body;
     }
 
+    async listAgentPermissions(currentDirectory = process.cwd()) {
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/permissions`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.permissions)
+            || response.body.permissions.length > 100
+            || response.body.permissions.some((permission) => permission === null
+                || typeof permission !== 'object'
+                || typeof permission.name !== 'string'
+                || !/^[a-z]+(?:\.[a-z]+)+$/.test(permission.name)
+                || typeof permission.label !== 'string'
+                || typeof permission.workspace_scope !== 'boolean')) {
+            throw new Error('MyCompanies devolvió un catálogo de permisos Agent no válido.');
+        }
+
+        return response.body;
+    }
+
     async createAgent(agentData, currentDirectory = process.cwd()) {
         if (agentData === null || typeof agentData !== 'object' || Array.isArray(agentData)) {
             throw new Error('Indica un nombre para el nuevo agente.');
