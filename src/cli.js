@@ -40,6 +40,26 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`Permisos vigentes: ${identity.permissions.length === 0 ? 'ninguno' : identity.permissions.map((permission) => `${safeTerminalText(permission.name)} (${permission.scope}${permission.workspace_name ? `: ${safeTerminalText(permission.workspace_name)}` : ''})`).join(', ')}\n`);
             return 0;
         }
+        if (agentCommand === 'tasks') {
+            const options = parseAgentTasksOptions(agentArguments);
+            const result = await agentClient.listTasks(currentDirectory, options.afterId);
+            if (result.tasks.length === 0) {
+                streams.stdout.write('El agente no tiene tareas activas en su ámbito.\n');
+                return 0;
+            }
+            streams.stdout.write(`Tareas del agente (${result.tasks.length}):\n`);
+            for (const task of result.tasks) {
+                const status = { open: 'abierta', in_progress: 'en curso', blocked: 'bloqueada' }[task.status];
+                const priority = { low: 'baja', normal: 'normal', high: 'alta' }[task.priority];
+                const dueDate = task.due_date === null ? '' : ` · vence ${task.due_date}`;
+                const workspaceName = task.workspace === null ? 'Empresa' : safeTerminalText(task.workspace.name);
+                streams.stdout.write(`#${task.id} [${status} · ${priority}] ${workspaceName} · ${safeTerminalText(task.title)}${dueDate} · responsable ${formatAssignee(task.assignee)}\n`);
+            }
+            if (result.has_more) {
+                streams.stdout.write(`Hay más tareas dentro del ámbito del agente. Continúa con: mycompany agent tasks --after=${result.next_after}\n`);
+            }
+            return 0;
+        }
         if (agentCommand === 'forget' && agentArguments.length === 0) {
             await agentClient.forget(currentDirectory);
             streams.stdout.write('Credencial Agent local eliminada. Revócala también en MyCompanies para invalidarla en el servidor.\n');
@@ -172,6 +192,14 @@ export function parseAgentLoginOptions(argumentsList) {
     return options;
 }
 
+export function parseAgentTasksOptions(argumentsList) {
+    if (argumentsList.length === 0) return { afterId: null };
+    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent tasks. Usa --after=ID.');
+    const match = /^--after=(.+)$/.exec(argumentsList[0]);
+    if (match === null) throw new Error('Opción desconocida para agent tasks. Usa --after=ID.');
+    return { afterId: parseTaskId(match[1]) };
+}
+
 export function parseTaskId(value) {
     if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
         throw new Error('El ID de tarea debe ser un entero positivo.');
@@ -291,6 +319,8 @@ function printHelp(stdout) {
     stdout.write('    El servidor debe usar HTTPS; HTTP solo se permite para pruebas en localhost. La carpeta de empresa actual se asocia a la identidad.\n');
     stdout.write('  mycompany agent me\n');
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
+    stdout.write('  mycompany agent tasks [--after=ID]\n');
+    stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent forget\n');
     stdout.write('    Elimina la credencial Agent local de esta carpeta. No la revoca en MyCompanies.\n');
     stdout.write('\nAlcance actual: no hay sincronización automática ni comando sync. init solo gestiona archivos locales; heartbeat, work y tasks consultan la API.\n');

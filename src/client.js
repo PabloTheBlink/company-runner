@@ -341,6 +341,38 @@ export class AgentClient {
         await this.configStore.forgetAgent(currentDirectory);
     }
 
+    async listTasks(currentDirectory = process.cwd(), afterId = null) {
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de tareas debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/tasks${cursor}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene un permiso de lectura de tareas para su ámbito (HTTP 403).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.tasks)
+            || response.body.tasks.length > 100
+            || typeof response.body.has_more !== 'boolean'
+            || response.body.tasks.some((task) => !isAgentTask(task))
+            || (response.body.has_more
+                ? !Number.isInteger(response.body.next_after)
+                    || response.body.next_after < 1
+                    || response.body.tasks.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
+            throw new Error('MyCompanies devolvió una lista de tareas Agent no válida.');
+        }
+        return response.body;
+    }
+
     async requestIdentity(serverUrl, apiToken) {
         const response = await this.getJson(`${serverUrl}/api/v1/agent/me`, apiToken);
         if (response.status === 401) {
@@ -380,8 +412,9 @@ export class AgentClient {
         } catch {
             throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
         }
-        if (response.status !== 200 && response.status !== 401) {
-            throw new Error(`MyCompanies no pudo validar la identidad Agent (HTTP ${response.status}).`);
+        if (response.status !== 200) {
+            if ([401, 403, 404, 429].includes(response.status)) return { status: response.status, body: {} };
+            throw new Error(`MyCompanies devolvió un error HTTP ${response.status}.`);
         }
         let responseText;
         try {
@@ -422,6 +455,23 @@ function isRunnerAssignee(assignee) {
         && typeof assignee === 'object'
         && ['user', 'agent'].includes(assignee.type)
         && typeof assignee.name === 'string';
+}
+
+function isAgentTask(task) {
+    return task !== null
+        && typeof task === 'object'
+        && Number.isInteger(task.id)
+        && task.id > 0
+        && typeof task.title === 'string'
+        && ['open', 'in_progress', 'blocked'].includes(task.status)
+        && ['low', 'normal', 'high'].includes(task.priority)
+        && (task.assignee === null || isRunnerAssignee(task.assignee))
+        && (task.due_date === null || /^\d{4}-\d{2}-\d{2}$/.test(task.due_date))
+        && (task.workspace === null
+            || (typeof task.workspace === 'object'
+                && Number.isInteger(task.workspace.id)
+                && task.workspace.id > 0
+                && typeof task.workspace.name === 'string'));
 }
 
 async function readResponseLimited(response, maximumBytes) {

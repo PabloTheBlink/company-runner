@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentLoginOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentLoginOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -42,6 +42,13 @@ test('agent login requires a server and supports explicit loopback HTTP only', (
     assert.throws(() => parseAgentLoginOptions(['--server=https://example.com', '--token=secret']), /Opción desconocida/);
 });
 
+test('agent task listing accepts a single positive cursor', () => {
+    assert.deepEqual(parseAgentTasksOptions([]), { afterId: null });
+    assert.deepEqual(parseAgentTasksOptions(['--after=25']), { afterId: 25 });
+    assert.throws(() => parseAgentTasksOptions(['--after=0']), /entero positivo/);
+    assert.throws(() => parseAgentTasksOptions(['--after=25', '--after=50']), /Opción desconocida/);
+});
+
 test('the executable command is named mycompany and help uses that name', async () => {
     const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
     const packageConfiguration = JSON.parse(await readFile(packagePath, 'utf8'));
@@ -56,6 +63,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany task ID/);
     assert.match(output.value, /mycompany agent login/);
     assert.match(output.value, /mycompany agent me/);
+    assert.match(output.value, /mycompany agent tasks/);
     assert.match(output.value, /no hay sincronización automática/);
     assert.match(output.value, /no se crea una carpeta por Workspace/);
     assert.match(output.value, /no conecta con el servidor/);
