@@ -497,6 +497,52 @@ test('agent workspace list and detail use the company-scoped read API', async ()
     });
 });
 
+test('agent lists direct reports and only their active permissions', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.url, '/api/v1/agent/agents?after_id=25');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                agents: [{
+                    id: 26,
+                    uuid: '6b7a2b59-1e1b-4e42-b658-ffb2212f3f56',
+                    name: 'Directora marketing',
+                    role: 'Marketing',
+                    status: 'active',
+                    permissions: [{ name: 'bets.read', scope: 'company' }],
+                }],
+                has_more: false,
+                next_after: null,
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const result = await client.listAgents(companyRoot, 25);
+            assert.equal(result.agents[0].permissions[0].name, 'bets.read');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent offer status update uses the management endpoint and confirms its actor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');

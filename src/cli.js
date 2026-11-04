@@ -194,6 +194,26 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'agents') {
+            const options = parseAgentAgentsOptions(agentArguments);
+            const result = await agentClient.listAgents(currentDirectory, options.afterId);
+            if (result.agents.length === 0) {
+                streams.stdout.write('El agente no tiene reportes directos.\n');
+                return 0;
+            }
+            streams.stdout.write(`Reportes directos (${result.agents.length}):\n`);
+            for (const report of result.agents) {
+                const role = report.role === null ? '' : ` · ${safeTerminalText(report.role)}`;
+                const grants = report.permissions.length === 0
+                    ? 'sin permisos concedidos'
+                    : report.permissions.map((permission) => `${safeTerminalText(permission.name)} (${safeTerminalText(permission.scope)})`).join(', ');
+                streams.stdout.write(`#${report.id} [${report.status}] ${safeTerminalText(report.name)}${role} · ${grants}\n`);
+            }
+            if (result.has_more) {
+                streams.stdout.write(`Hay más reportes directos. Continúa con: mycompany agent agents --after=${result.next_after}\n`);
+            }
+            return 0;
+        }
         if (agentCommand === 'workspace') {
             const workspace = await agentClient.getWorkspace(parseAgentWorkspaceId(agentArguments), currentDirectory);
             streams.stdout.write(`#${workspace.id} · ${safeTerminalText(workspace.name)}\nUUID: ${workspace.uuid}\nEstado: ${safeTerminalText(workspace.status)}\n`);
@@ -510,6 +530,14 @@ export function parseAgentWorkspacesOptions(argumentsList) {
     if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent workspaces. Usa --after=ID.');
     const match = /^--after=(.+)$/.exec(argumentsList[0]);
     if (match === null) throw new Error('Opción desconocida para agent workspaces. Usa --after=ID.');
+    return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentAgentsOptions(argumentsList) {
+    if (argumentsList.length === 0) return { afterId: null };
+    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent agents. Usa --after=ID.');
+    const match = /^--after=(.+)$/.exec(argumentsList[0]);
+    if (match === null) throw new Error('Opción desconocida para agent agents. Usa --after=ID.');
     return { afterId: parseTaskId(match[1]) };
 }
 
@@ -871,6 +899,8 @@ function printHelp(stdout) {
     stdout.write('    Lista Workspaces de la empresa con workspaces.read o workspaces.manage.\n');
     stdout.write('  mycompany agent workspace ID\n');
     stdout.write('    Muestra un Workspace lógico sin exponer una ruta local.\n');
+    stdout.write('  mycompany agent agents [--after=ID]\n');
+    stdout.write('    Lista reportes directos y grants vigentes con agents.permissions.manage.\n');
     stdout.write('  mycompany agent offer ID\n');
     stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
     stdout.write('  mycompany agent offer status ID ESTADO\n');
