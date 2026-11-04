@@ -346,6 +346,78 @@ export class AgentClient {
         await this.configStore.forgetAgent(currentDirectory);
     }
 
+    async issueCredential(agentId, name, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(agentId) || agentId < 1) throw new Error('El ID de agente debe ser un entero positivo.');
+        if (typeof name !== 'string' || name.trim() === '' || name.length > 120) {
+            throw new Error('El nombre de credencial debe tener entre 1 y 120 caracteres.');
+        }
+        await this.configStore.assertAgentNotConfigured(agentId);
+        const parent = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(parent.server_url, parent.allow_insecure_localhost);
+        const endpoint = `${serverUrl}/api/v1/agent/agents/${agentId}/credentials`;
+        const response = await this.postJson(endpoint, { name: name.trim() }, parent.api_token);
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        if (response.status === 403) throw new Error('El agente necesita agents.credentials.manage para emitir credenciales (HTTP 403).');
+        if (response.status === 404) throw new Error('El destino no es un reporte directo de esta empresa (HTTP 404).');
+        if (response.status === 409) throw new Error('El agente de destino está pausado y no puede recibir credenciales (HTTP 409).');
+        if (response.status === 422) throw new Error('MyCompanies rechazó el nombre de credencial (HTTP 422).');
+        if (response.status === 429) throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        const { credential_id: credentialId, api_token: apiToken, agent } = response.body;
+        if (response.status !== 201
+            || !Number.isSafeInteger(credentialId) || credentialId < 1
+            || typeof apiToken !== 'string' || !AGENT_TOKEN_PATTERN.test(apiToken)
+            || agent?.id !== agentId || typeof agent.uuid !== 'string'
+            || typeof agent.name !== 'string' || !(agent.role === null || typeof agent.role === 'string') || agent.status !== 'active'
+            || agent.company_id !== parent.company_id || typeof agent.company_name !== 'string') {
+            throw new Error('MyCompanies devolvió una credencial de Agent no válida; no se mostró ningún secreto.');
+        }
+
+        try {
+            await this.configStore.saveAgent({
+                server_url: serverUrl,
+                agent_id: agent.id,
+                agent_name: agent.name,
+                company_id: agent.company_id,
+                company_name: agent.company_name,
+                company_root_path: parent.company_root_path,
+                allow_insecure_localhost: parent.allow_insecure_localhost,
+                api_token: apiToken,
+            });
+        } catch {
+            try {
+                const rollback = await this.deleteJson(`${endpoint}/${credentialId}`, parent.api_token);
+                if (rollback.status === 200 && rollback.body.revoked === true) {
+                    throw new Error('No se pudo guardar la credencial en el almacén local; la credencial remota se revocó. El secreto no se mostró.');
+                }
+            } catch (error) {
+                if (error.message.startsWith('No se pudo guardar la credencial')) throw error;
+            }
+            throw new Error(`MyCompanies emitió la credencial #${credentialId}, pero no pudo guardarse ni revocarse automáticamente. Revócala desde la web. El secreto no se mostró.`);
+        }
+
+        return { credential_id: credentialId, agent: { id: agent.id, name: agent.name } };
+    }
+
+    async revokeCredential(agentId, credentialId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(agentId) || agentId < 1 || !Number.isSafeInteger(credentialId) || credentialId < 1) {
+            throw new Error('Los IDs de agente y credencial deben ser enteros positivos.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.deleteJson(
+            `${serverUrl}/api/v1/agent/agents/${agentId}/credentials/${credentialId}`,
+            configuration.api_token,
+        );
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        if (response.status === 403) throw new Error('El agente necesita agents.credentials.manage para revocar credenciales (HTTP 403).');
+        if (response.status === 404) throw new Error('La credencial no pertenece a un reporte directo o ya fue revocada (HTTP 404).');
+        if (response.status === 429) throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        if (response.status !== 200 || response.body.revoked !== true) {
+            throw new Error('MyCompanies devolvió una confirmación de revocación no válida.');
+        }
+        return response.body;
+    }
+
     async publishArtifact(filePath, metadata, currentDirectory = process.cwd()) {
         if (typeof filePath !== 'string' || filePath.trim() === '') {
             throw new Error('Indica el archivo concreto que quieres publicar.');
@@ -1624,7 +1696,7 @@ export class AgentClient {
             || !Number.isInteger(agent.id) || agent.id < 1
             || typeof agent.uuid !== 'string'
             || typeof agent.name !== 'string'
-            || typeof agent.role !== 'string'
+            || !(agent.role === null || typeof agent.role === 'string')
             || company === null || typeof company !== 'object'
             || !Number.isInteger(company.id) || company.id < 1
             || typeof company.name !== 'string'

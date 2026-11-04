@@ -143,3 +143,45 @@ test('legacy single-runner configuration remains selectable by its workspace dir
         assert.deepEqual(await store.loadForDirectory(workspacePath), configuration);
     });
 });
+
+test('multiple Agent profiles can share a company folder and the original profile remains default', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const owner = {
+            server_url: 'https://mycompanies.example', agent_id: 1, agent_name: 'CEO', company_id: 4,
+            company_name: 'Devetty', company_root_path: companyRoot, allow_insecure_localhost: false, api_token: 'A'.repeat(80),
+        };
+        const report = { ...owner, agent_id: 12, agent_name: 'Marketing', api_token: 'B'.repeat(80) };
+
+        await store.saveAgent(owner);
+        await store.saveAgent(report);
+
+        assert.equal((await store.loadAgentForDirectory(companyRoot)).agent_id, 1);
+        assert.equal((await store.loadAgentForDirectory(companyRoot, '12')).agent_id, 12);
+        await assert.rejects(store.loadAgentForDirectory(companyRoot, '999'), /No hay un agente configurado para esta identidad/);
+    });
+});
+
+test('ambiguous same-folder Agent profiles require an explicit selected identity', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const createConfiguration = (agentId) => ({
+            server_url: 'https://mycompanies.example', agent_id: agentId, agent_name: `Agent ${agentId}`,
+            company_id: 4, company_name: 'Devetty', company_root_path: companyRoot,
+            allow_insecure_localhost: false, api_token: 'A'.repeat(80),
+        });
+        await store.saveAgent(createConfiguration(12));
+        await store.saveAgent(createConfiguration(13));
+        const files = await import('node:fs/promises');
+        for (const agentId of [12, 13]) {
+            const file = path.join(store.agentsDirectory, `agent-${agentId}.json`);
+            const configuration = JSON.parse(await files.readFile(file, 'utf8'));
+            delete configuration.default_for_company;
+            await files.writeFile(file, JSON.stringify(configuration), { mode: 0o600 });
+        }
+
+        await assert.rejects(store.loadAgentForDirectory(companyRoot), /Hay varios agentes configurados/);
+    });
+});

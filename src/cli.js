@@ -84,7 +84,8 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         }
         if (agentCommand === 'me' && agentArguments.length === 0) {
             const identity = await agentClient.identity(currentDirectory);
-            streams.stdout.write(`Agente: ${safeTerminalText(identity.agent.name)} (${safeTerminalText(identity.agent.role)}) · Empresa: ${safeTerminalText(identity.company.name)}\n`);
+            const role = identity.agent.role === null ? 'sin rol' : safeTerminalText(identity.agent.role);
+            streams.stdout.write(`Agente: ${safeTerminalText(identity.agent.name)} (${role}) · Empresa: ${safeTerminalText(identity.company.name)}\n`);
             streams.stdout.write(`Permisos vigentes: ${identity.permissions.length === 0 ? 'ninguno' : identity.permissions.map((permission) => `${safeTerminalText(permission.name)} (${permission.scope}${permission.workspace_name ? `: ${safeTerminalText(permission.workspace_name)}` : ''})`).join(', ')}\n`);
             return 0;
         }
@@ -116,6 +117,18 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(result.changed
                 ? `Perfil del agente #${result.agent.id} actualizado (${result.changed_fields.join(', ')}).\n`
                 : `El perfil del agente #${result.agent.id} ya tenía esos valores.\n`);
+            return 0;
+        }
+        if (agentCommand === 'credential' && agentArguments[0] === 'issue') {
+            const options = parseAgentCredentialIssueOptions(agentArguments.slice(1));
+            const result = await agentClient.issueCredential(options.agentId, options.name, currentDirectory);
+            streams.stdout.write(`Credencial #${result.credential_id} guardada localmente para el agente #${result.agent.id} ${safeTerminalText(result.agent.name)}. El secreto no se muestra.\n`);
+            return 0;
+        }
+        if (agentCommand === 'credential' && agentArguments[0] === 'revoke') {
+            const options = parseAgentCredentialRevokeOptions(agentArguments.slice(1));
+            await agentClient.revokeCredential(options.agentId, options.credentialId, currentDirectory);
+            streams.stdout.write(`Credencial #${options.credentialId} del agente #${options.agentId} revocada.\n`);
             return 0;
         }
         if (agentCommand === 'tasks') {
@@ -401,7 +414,7 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write('Credencial Agent local eliminada. Revócala también en MyCompanies para invalidarla en el servidor.\n');
             return 0;
         }
-        throw new Error('Uso: mycompany agent login|me|forget. Usa mycompany help.');
+        throw new Error('Uso: mycompany agent login|me|forget|credential. Usa mycompany help.');
     }
 
     if (command === 'enroll') {
@@ -666,6 +679,24 @@ export function parseAgentProfileEditOptions(argumentsList) {
     if (Object.keys(changes).length === 0) throw new Error('Indica al menos un campo: --role o --instructions.');
 
     return { agentId, changes };
+}
+
+export function parseAgentCredentialIssueOptions(argumentsList) {
+    if (argumentsList.length < 2) throw new Error('Uso: mycompany agent credential issue AGENT_ID --name=NOMBRE.');
+    const agentId = parseTaskId(argumentsList[0]);
+    let name = null;
+    for (const argument of argumentsList.slice(1)) {
+        const match = /^--name=(.+)$/.exec(argument);
+        if (match === null || name !== null) throw new Error('Opción desconocida o repetida para credential issue. Usa --name=NOMBRE.');
+        name = match[1];
+    }
+    if (name === null || name.trim() === '' || name.length > 120) throw new Error('El nombre de credencial debe tener entre 1 y 120 caracteres.');
+    return { agentId, name };
+}
+
+export function parseAgentCredentialRevokeOptions(argumentsList) {
+    if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent credential revoke AGENT_ID CREDENTIAL_ID.');
+    return { agentId: parseTaskId(argumentsList[0]), credentialId: parseTaskId(argumentsList[1]) };
 }
 
 export function parseAgentPermissionRevokeOptions(argumentsList) {
@@ -1019,6 +1050,8 @@ function printHelp(stdout) {
     stdout.write('    Pausa o reactiva un reporte directo con agents.manage; pausar revoca sus permisos delegados descendientes.\n');
     stdout.write('  mycompany agent edit AGENT_ID [--role=ROL] [--instructions=TEXTO]\n');
     stdout.write('    Actualiza solo rol e instrucciones de un reporte directo; usa none para borrar uno de esos campos. Requiere agents.manage.\n');
+    stdout.write('  mycompany agent credential issue AGENT_ID --name=NOMBRE | credential revoke AGENT_ID CREDENTIAL_ID\n');
+    stdout.write('    Emite una credencial para un reporte directo con agents.credentials.manage y la guarda localmente sin mostrar el secreto; también revoca una credencial concreta.\n');
     stdout.write('  mycompany agent tasks [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -151,6 +151,15 @@ test('agent profile edit accepts only role and instructions and can clear either
     });
     assert.throws(() => parseAgentProfileEditOptions(['26']), /al menos un campo/);
     assert.throws(() => parseAgentProfileEditOptions(['26', '--status=paused']), /Opción desconocida/);
+});
+
+test('Agent credential issue and revoke require explicit target and validated name', () => {
+    assert.deepEqual(parseAgentCredentialIssueOptions(['26', '--name=Marketing CLI']), { agentId: 26, name: 'Marketing CLI' });
+    assert.deepEqual(parseAgentCredentialRevokeOptions(['26', '91']), { agentId: 26, credentialId: 91 });
+    assert.throws(() => parseAgentCredentialIssueOptions(['0', '--name=Marketing']), /entero positivo/);
+    assert.throws(() => parseAgentCredentialIssueOptions(['26']), /name/);
+    assert.throws(() => parseAgentCredentialIssueOptions(['26', '--name=Marketing', '--token=secret']), /Opción desconocida/);
+    assert.throws(() => parseAgentCredentialRevokeOptions(['26', '0']), /entero positivo/);
 });
 
 test('agent offer status accepts only supported lifecycle states', () => {

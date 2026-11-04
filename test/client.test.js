@@ -103,7 +103,7 @@ test('agent login verifies identity before storing its credential separately fro
             assert.equal(request.headers.authorization, `Bearer ${token}`);
             response.writeHead(200, { 'content-type': 'application/json' });
             response.end(JSON.stringify({
-                agent: { id: 12, uuid: 'c376a06b-8b47-4b50-9438-3a522af9f1fa', name: 'Vera', role: 'CEO' },
+                agent: { id: 12, uuid: 'c376a06b-8b47-4b50-9438-3a522af9f1fa', name: 'Vera', role: null },
                 company: { id: 4, name: 'Devetty' },
                 permissions: [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }],
             }));
@@ -1777,6 +1777,72 @@ test('task detail rejects malformed response data', async () => {
 
         try {
             await assert.rejects(new RunnerClient(configStore).getTask(42, workspacePath), /respuesta de detalle no válida/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('authorized Agent credential issuance stores the child token locally without exposing it in the result', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const parentToken = 'A'.repeat(80);
+        const childToken = 'B'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'POST');
+            assert.equal(request.url, '/api/v1/agent/agents/12/credentials');
+            assert.equal(request.headers.authorization, `Bearer ${parentToken}`);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            assert.deepEqual(JSON.parse(body), { name: 'CLI marketing' });
+            response.writeHead(201, { 'content-type': 'application/json', 'cache-control': 'no-store, private' });
+            response.end(JSON.stringify({
+                credential_id: 55, api_token: childToken,
+                agent: { id: 12, uuid: 'c376a06b-8b47-4b50-9438-3a522af9f1fa', name: 'Marketing', role: null, status: 'active', company_id: 4, company_name: 'Devetty' },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl, agent_id: 1, agent_name: 'CEO', company_id: 4,
+            company_name: 'Devetty', company_root_path: companyRoot, allow_insecure_localhost: true, api_token: parentToken,
+        });
+
+        try {
+            const result = await new AgentClient(configStore).issueCredential(12, 'CLI marketing', companyRoot);
+            assert.deepEqual(result, { credential_id: 55, agent: { id: 12, name: 'Marketing' } });
+            assert.equal((await configStore.selectAgentForDirectory(companyRoot, '12')).configuration.api_token, childToken);
+            assert.equal((await configStore.loadAgentForDirectory(companyRoot)).agent_id, 1);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('Agent credential revocation validates the individual credential response', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.method, 'DELETE');
+            assert.equal(request.url, '/api/v1/agent/agents/12/credentials/55');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ revoked: true }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl, agent_id: 1, agent_name: 'CEO', company_id: 4,
+            company_name: 'Devetty', company_root_path: companyRoot, allow_insecure_localhost: true, api_token: token,
+        });
+
+        try {
+            assert.deepEqual(await new AgentClient(configStore).revokeCredential(12, 55, companyRoot), { revoked: true });
         } finally {
             server.close();
             await once(server, 'close');

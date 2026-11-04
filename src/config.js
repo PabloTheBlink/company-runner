@@ -92,16 +92,21 @@ export class ConfigStore {
 
     async saveAgent(configuration) {
         const agents = await this.readAgents();
-        if (agents.some(({ configuration: existing }) => (
-            existing.agent_id === configuration.agent_id
-            || existing.company_root_path === configuration.company_root_path
-        ))) {
-            throw new Error('Ya existe un agente configurado para esta identidad o carpeta. Revoca su credencial anterior antes de iniciar sesión de nuevo.');
+        if (agents.some(({ configuration: existing }) => existing.agent_id === configuration.agent_id)) {
+            throw new Error('Ya existe una credencial local para este agente.');
         }
+
+        const hasExistingProfileForCompany = agents.some(({ configuration: existing }) => (
+            existing.company_root_path === configuration.company_root_path
+        ));
+        const storedConfiguration = {
+            ...configuration,
+            default_for_company: configuration.default_for_company ?? !hasExistingProfileForCompany,
+        };
 
         await this.ensurePrivateDirectory(path.dirname(this.path));
         await this.ensurePrivateDirectory(this.agentsDirectory);
-        const credentialPath = this.agentPath(configuration.agent_id);
+        const credentialPath = this.agentPath(storedConfiguration.agent_id);
         let file;
         try {
             file = await open(credentialPath, 'wx', 0o600);
@@ -113,7 +118,7 @@ export class ConfigStore {
         }
 
         try {
-            await file.writeFile(`${JSON.stringify(configuration, null, 2)}\n`, 'utf8');
+            await file.writeFile(`${JSON.stringify(storedConfiguration, null, 2)}\n`, 'utf8');
             await file.sync();
         } catch {
             await file.close();
@@ -124,8 +129,17 @@ export class ConfigStore {
         if (process.platform !== 'win32') await chmod(credentialPath, 0o600);
     }
 
-    async loadAgentForDirectory(currentDirectory = process.cwd()) {
-        return (await this.selectAgentForDirectory(currentDirectory)).configuration;
+    async assertAgentNotConfigured(agentId) {
+        if ((await this.readAgents()).some(({ configuration }) => configuration.agent_id === agentId)) {
+            throw new Error('Este agente ya tiene una credencial local configurada.');
+        }
+    }
+
+    async loadAgentForDirectory(currentDirectory = process.cwd(), selectedAgentId = process.env.MYCOMPANY_AGENT_ID) {
+        const { default_for_company: _defaultForCompany, ...configuration } = (
+            await this.selectAgentForDirectory(currentDirectory, selectedAgentId)
+        ).configuration;
+        return configuration;
     }
 
     async forgetAgent(currentDirectory = process.cwd()) {
@@ -133,7 +147,7 @@ export class ConfigStore {
         await unlink(agent.filePath);
     }
 
-    async selectAgentForDirectory(currentDirectory) {
+    async selectAgentForDirectory(currentDirectory, selectedAgentId = process.env.MYCOMPANY_AGENT_ID) {
         let resolvedDirectory;
         try {
             resolvedDirectory = await realpath(currentDirectory);
@@ -158,11 +172,25 @@ export class ConfigStore {
             throw new Error('No hay un agente configurado para esta carpeta. Ejecuta agent login desde la raíz de empresa.');
         }
         matchingAgents.sort((first, second) => second.resolvedCompanyRootPath.length - first.resolvedCompanyRootPath.length);
-        if (matchingAgents.length > 1
-            && matchingAgents[0].resolvedCompanyRootPath === matchingAgents[1].resolvedCompanyRootPath) {
-            throw new Error('Hay varios agentes configurados para esta carpeta. Revísalos antes de continuar.');
+        const mostSpecificRoot = matchingAgents[0].resolvedCompanyRootPath;
+        const sameRootAgents = matchingAgents.filter((agent) => agent.resolvedCompanyRootPath === mostSpecificRoot);
+        if (selectedAgentId !== undefined && selectedAgentId !== '') {
+            if (!/^\d+$/.test(String(selectedAgentId)) || Number(selectedAgentId) < 1) {
+                throw new Error('MYCOMPANY_AGENT_ID debe ser un ID de agente positivo.');
+            }
+            const selectedAgent = sameRootAgents.find((agent) => agent.configuration.agent_id === Number(selectedAgentId));
+            if (!selectedAgent) {
+                throw new Error('No hay un agente configurado para esta identidad en la carpeta actual.');
+            }
+            return selectedAgent;
         }
-        return matchingAgents[0];
+
+        if (sameRootAgents.length === 1) return sameRootAgents[0];
+        const defaultAgents = sameRootAgents.filter((agent) => agent.configuration.default_for_company === true);
+        if (defaultAgents.length === 1) return defaultAgents[0];
+        const legacyAgents = sameRootAgents.filter((agent) => agent.configuration.default_for_company === undefined);
+        if (defaultAgents.length === 0 && legacyAgents.length === 1) return legacyAgents[0];
+        throw new Error('Hay varios agentes configurados para esta carpeta. Define MYCOMPANY_AGENT_ID con el ID del agente antes de continuar.');
     }
 
     async readAgents() {
@@ -192,7 +220,8 @@ export class ConfigStore {
                     || typeof configuration.company_name !== 'string'
                     || typeof configuration.company_root_path !== 'string'
                     || typeof configuration.allow_insecure_localhost !== 'boolean'
-                    || typeof configuration.api_token !== 'string') {
+                    || typeof configuration.api_token !== 'string'
+                    || (configuration.default_for_company !== undefined && typeof configuration.default_for_company !== 'boolean')) {
                     throw new Error('La configuración Agent local está incompleta.');
                 }
                 agents.push({ configuration, filePath });
