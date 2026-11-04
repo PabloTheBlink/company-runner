@@ -74,17 +74,27 @@ test('agent runtime run requires a valid task, AgY provider, and bounded timeout
         taskId: 42,
         provider: 'agy',
         timeoutSeconds: 300,
+        publishPath: null,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--timeout=600', '--provider=agy']), {
         taskId: 42,
         provider: 'agy',
         timeoutSeconds: 600,
+        publishPath: null,
+    });
+    assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=reports/daily.md']), {
+        taskId: 42,
+        provider: 'agy',
+        timeoutSeconds: 300,
+        publishPath: 'reports/daily.md',
     });
     assert.throws(() => parseAgentRuntimeRunOptions(['0', '--provider=agy']), /positivo/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=other']), /Opción desconocida/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=9']), /entre 10 y 900/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=901']), /entre 10 y 900/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=300', '--timeout=400']), /Uso:/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=']), /ruta/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=reports/a.md', '--publish=reports/b.md']), /repetida/);
 });
 
 test('agent runtime file access commands require one safe path and one explicit operation', () => {
@@ -242,7 +252,10 @@ test('agent runtime run stages only granted files, applies only authorized write
             response.end(JSON.stringify({
                 agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: 'CEO' },
                 company: { id: 4, name: 'Devetty' },
-                permissions: [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }],
+                permissions: [
+                    { name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'artifacts.publish', scope: 'company', workspace_id: null, workspace_name: null },
+                ],
             }));
             return;
         }
@@ -264,6 +277,7 @@ test('agent runtime run stages only granted files, applies only authorized write
     await writeFile(path.join(companyRoot, '.env'), 'KEY=original\n', { mode: 0o600 });
     const taskRunnerCalls = [];
     const confirmations = [];
+    const publishedArtifacts = [];
     const configStore = {
         localAgentFilePolicyPath: path.join(configRoot, 'agent-file-access.json'),
         async loadAgentForDirectory() {
@@ -301,13 +315,17 @@ test('agent runtime run stages only granted files, applies only authorized write
         confirmations.push(request);
         return true;
     };
+    const artifactPublisher = async (filePath, metadata, directory) => {
+        publishedArtifacts.push({ filePath, metadata, directory });
+        return { id: 77, title: metadata.title, original_filename: path.basename(filePath) };
+    };
     const output = { value: '', write(chunk) { this.value += chunk; } };
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
 
     try {
         assert.equal(await run(
-            ['agent', 'runtime', 'run', '42', '--provider=agy'],
+            ['agent', 'runtime', 'run', '42', '--provider=agy', '--publish=reports/daily.md'],
             { stdout: output, stderr: output },
             companyRoot,
             configStore,
@@ -315,6 +333,7 @@ test('agent runtime run stages only granted files, applies only authorized write
             undefined,
             agentRuntimeRunner,
             agentRuntimeConfirmer,
+            artifactPublisher,
         ), 0);
         assert.deepEqual(requests, ['/api/v1/agent/me', '/api/v1/agent/tasks/42']);
         assert.equal(taskRunnerCalls.length, 1);
@@ -323,16 +342,89 @@ test('agent runtime run stages only granted files, applies only authorized write
             read: ['.env'],
             write: ['.env', 'reports/daily.md'],
         });
+        assert.equal(confirmations[0].publishPath, 'reports/daily.md');
+        assert.deepEqual(publishedArtifacts, [{
+            filePath: 'reports/daily.md',
+            metadata: { title: 'Preparar informe', source: 'MyCompanies task #42' },
+            directory: companyRoot,
+        }]);
         assert.equal(await readFile(path.join(companyRoot, '.env'), 'utf8'), 'KEY=updated\n');
         assert.equal(await readFile(path.join(companyRoot, 'reports', 'daily.md'), 'utf8'), 'Resumen\n');
         await assert.rejects(stat(path.join(companyRoot, 'unapproved.md')), { code: 'ENOENT' });
         assert.match(output.value, /Informe listo/);
         assert.match(output.value, /Archivos actualizados: \.env, reports\/daily\.md/);
+        assert.match(output.value, /Informe #77 publicado para Preparar informe \(daily\.md\)/);
         await assert.rejects(stat(taskRunnerCalls[0].cwd), { code: 'ENOENT' });
     } finally {
         server.close();
         await once(server, 'close');
         await rm(testRoot, { recursive: true, force: true });
+    }
+});
+
+test('agent runtime run refuses artifact publication without a matching server grant and local write grant', async () => {
+    const companyRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-run-publish-denied-test-'));
+    const permissions = [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }];
+    const localGrants = [{ path: 'reports/daily.md', operations: ['write'] }];
+    const server = createServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: null },
+                company: { id: 4, name: 'Devetty' },
+                permissions,
+            }));
+            return;
+        }
+        response.end(JSON.stringify({ task: {
+            id: 42, title: 'Preparar informe', description: null, status: 'open', priority: 'normal', due_date: null,
+            assignee: { type: 'agent', id: 12, name: 'Vera' }, workspace: null,
+        } }));
+    });
+    let runtimeStarted = false;
+    const configStore = {
+        async loadAgentForDirectory() {
+            return {
+                server_url: `http://127.0.0.1:${server.address().port}`,
+                agent_id: 12, company_id: 4, allow_insecure_localhost: true, api_token: 'P'.repeat(80),
+            };
+        },
+        async listAgentFileAccessForDirectory() { return localGrants; },
+    };
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+
+    try {
+        await assert.rejects(run(
+            ['agent', 'runtime', 'run', '42', '--provider=agy', '--publish=reports/daily.md'],
+            { stdout: { write() {} }, stderr: { write() {} } },
+            companyRoot,
+            configStore,
+            async () => [{ provider: 'agy', command: 'agy' }],
+            undefined,
+            async () => { runtimeStarted = true; },
+            async () => true,
+            async () => { throw new Error('must not publish'); },
+        ), /artifacts.publish/);
+        assert.equal(runtimeStarted, false);
+        permissions.push({ name: 'artifacts.publish', scope: 'company', workspace_id: null, workspace_name: null });
+        localGrants.length = 0;
+        await assert.rejects(run(
+            ['agent', 'runtime', 'run', '42', '--provider=agy', '--publish=reports/daily.md'],
+            { stdout: { write() {} }, stderr: { write() {} } },
+            companyRoot,
+            configStore,
+            async () => [{ provider: 'agy', command: 'agy' }],
+            undefined,
+            async () => { runtimeStarted = true; },
+            async () => true,
+            async () => { throw new Error('must not publish'); },
+        ), /permiso local write/);
+        assert.equal(runtimeStarted, false);
+    } finally {
+        server.close();
+        await once(server, 'close');
+        await rm(companyRoot, { recursive: true, force: true });
     }
 });
 

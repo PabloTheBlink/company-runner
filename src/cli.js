@@ -22,6 +22,7 @@ export async function run(
     localFileAccessConfirmer = confirmLocalAgentFileAccess,
     agentRuntimeRunner = runAntigravityAgent,
     agentRuntimeConfirmer = confirmAgentRuntimeExecution,
+    agentArtifactPublisher = null,
 ) {
     const [command = 'help', ...argumentsAfterCommand] = argumentsList;
     if (['help', '--help', '-h'].includes(command)) {
@@ -163,6 +164,15 @@ export async function run(
                 const task = await agentClient.getTask(options.taskId, currentDirectory);
                 const plan = createAgentRuntimePlan(options.provider, installedRuntimes.map(({ provider }) => provider), identity, task);
                 const companyGrants = await configStore.listAgentFileAccessForDirectory(currentDirectory, plan.agentId);
+                if (options.publishPath !== null) {
+                    if (!hasAgentCompanyPermission(identity, 'artifacts.publish')) {
+                        throw new Error('Para publicar el resultado, el Agent necesita artifacts.publish con alcance de empresa.');
+                    }
+                    if (!companyGrants.some((grant) => normalizeLocalAgentPath(grant.path) === options.publishPath
+                        && grant.operations.includes('write'))) {
+                        throw new Error('El archivo de publicación necesita un permiso local write para esa ruta exacta.');
+                    }
+                }
                 const fileGrants = companyGrants.map((grant) => ({ agentId: plan.agentId, ...grant }));
                 const fileSummary = {
                     read: companyGrants.filter(({ operations }) => operations.includes('read')).map(({ path: filePath }) => filePath),
@@ -176,6 +186,7 @@ export async function run(
                     taskTitle: plan.taskTitle,
                     provider: plan.provider,
                     fileSummary,
+                    publishPath: options.publishPath,
                 }, streams);
                 if (!confirmed) throw new Error('El agente no se inició porque faltó la confirmación escrita.');
 
@@ -221,6 +232,15 @@ export async function run(
                         streams.stdout.write(`Archivos actualizados: ${writtenPaths.map(safeTerminalText).join(', ')}.\n`);
                     } else {
                         streams.stdout.write('No se aplicaron cambios a archivos de la empresa.\n');
+                    }
+                    if (options.publishPath !== null) {
+                        const publishArtifact = agentArtifactPublisher
+                            ?? ((filePath, metadata, directory) => agentClient.publishArtifact(filePath, metadata, directory));
+                        const artifact = await publishArtifact(options.publishPath, {
+                            title: plan.taskTitle,
+                            source: `MyCompanies task #${plan.taskId}`,
+                        }, currentDirectory);
+                        streams.stdout.write(`Informe #${artifact.id} publicado para ${safeTerminalText(artifact.title)} (${safeTerminalText(artifact.original_filename)}).\n`);
                     }
                     return 0;
                 } finally {
@@ -788,32 +808,54 @@ export function parseAgentRuntimePlanOptions(argumentsList) {
 }
 
 export function parseAgentRuntimeRunOptions(argumentsList) {
-    if (argumentsList.length < 2 || argumentsList.length > 3) {
-        throw new Error('Uso: mycompany agent runtime run TASK_ID --provider=agy [--timeout=SEGUNDOS].');
+    if (argumentsList.length < 2 || argumentsList.length > 4) {
+        throw new Error('Uso: mycompany agent runtime run TASK_ID --provider=agy [--timeout=SEGUNDOS] [--publish=RUTA].');
     }
 
     const taskId = parseTaskId(argumentsList[0]);
     let provider = null;
     let timeoutSeconds = 300;
+    let timeoutWasProvided = false;
+    let publishPath = null;
     for (const argument of argumentsList.slice(1)) {
         const providerMatch = /^--provider=(agy|codex|claude)$/.exec(argument);
         const timeoutMatch = /^--timeout=(\d+)$/.exec(argument);
+        const publishMatch = /^--publish=(.+)$/.exec(argument);
         if (providerMatch !== null && provider === null) {
             provider = providerMatch[1];
             continue;
         }
-        if (timeoutMatch !== null && timeoutSeconds === 300) {
+        if (timeoutMatch !== null && !timeoutWasProvided) {
+            timeoutWasProvided = true;
             timeoutSeconds = Number(timeoutMatch[1]);
             if (!Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 10 || timeoutSeconds > 900) {
                 throw new Error('El límite debe ser un entero entre 10 y 900 segundos.');
             }
             continue;
         }
+        if (timeoutMatch !== null && timeoutWasProvided) {
+            throw new Error('Uso: mycompany agent runtime run TASK_ID --provider=agy [--timeout=SEGUNDOS] [--publish=RUTA].');
+        }
+        if (publishMatch !== null && publishPath === null) {
+            publishPath = normalizeLocalAgentPath(publishMatch[1]);
+            if (publishPath === null || !['.md', '.txt', '.pdf'].includes(path.extname(publishPath).toLowerCase())) {
+                throw new Error('La ruta de publicación debe ser relativa y terminar en .md, .txt o .pdf.');
+            }
+            continue;
+        }
+        if (argument === '--publish=') throw new Error('Indica una ruta de publicación.');
         throw new Error('Opción desconocida o repetida para agent runtime run.');
     }
     if (provider === null) throw new Error('Indica --provider=agy para ejecutar la tarea.');
 
-    return { taskId, provider, timeoutSeconds };
+    return { taskId, provider, timeoutSeconds, publishPath };
+}
+
+function hasAgentCompanyPermission(identity, permissionName) {
+    if (!Array.isArray(identity.permissions)) return false;
+
+    return identity.permissions.some((permission) => permission?.name === permissionName
+        && permission.scope === 'company');
 }
 
 function createAgentRuntimePrompt(identity, task) {
@@ -847,12 +889,14 @@ async function confirmAgentRuntimeExecution(request, streams) {
         throw new Error('Iniciar un agente requiere un terminal interactivo.');
     }
 
-    const confirmation = `INICIAR ${request.agentId} ${request.taskId} AGY`;
+    const publishConfirmation = request.publishPath === null ? '' : ` PUBLICAR ${request.publishPath}`;
+    const confirmation = `INICIAR ${request.agentId} ${request.taskId} AGY${publishConfirmation}`;
     streams.stderr.write(`Empresa ${safeTerminalText(request.companyName)} · Agent ${safeTerminalText(request.agentName)} (#${request.agentId}) · tarea #${request.taskId}: ${safeTerminalText(request.taskTitle)}.\n`);
     streams.stderr.write('Se enviarán el título, la descripción y los archivos con permiso read a Antigravity. Solo se copiarán cambios de rutas con permiso write; se bloquearán shell, web, MCP y acceso fuera del staging.\n');
     streams.stderr.write(`Confirma escribiendo exactamente ${confirmation}:\n`);
     for (const filePath of request.fileSummary.read) streams.stderr.write(`  read · ${safeTerminalText(filePath)}\n`);
     for (const filePath of request.fileSummary.write) streams.stderr.write(`  write · ${safeTerminalText(filePath)}\n`);
+    if (request.publishPath !== null) streams.stderr.write(`Se publicará este archivo en MyCompanies: ${safeTerminalText(request.publishPath)}\n`);
     const prompt = createInterface({ input: streams.stdin, output: streams.stderr, terminal: true });
     try {
         return (await prompt.question('> ')) === confirmation;
@@ -1447,9 +1491,10 @@ function printHelp(stdout) {
     stdout.write('    Detecta Codex, Claude Code y Antigravity CLI (agy) en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
     stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude|agy\n');
     stdout.write('    Comprueba identidad, acceso a tarea y asignación del Agent. Solo muestra un plan; no inicia un modelo.\n');
-    stdout.write('  mycompany agent runtime run TASK_ID --provider=agy [--timeout=SEGUNDOS]\n');
+    stdout.write('  mycompany agent runtime run TASK_ID --provider=agy [--timeout=SEGUNDOS] [--publish=RUTA]\n');
     stdout.write('    Ejecuta una tarea asignada tras confirmación escrita; esta versión integra AgY en Linux. Envía la descripción y archivos read al proveedor.\n');
     stdout.write('    Fuerza sandbox, deniega shell, web, MCP y acceso fuera del staging; aplica solo rutas con permiso write y elimina el staging al terminar.\n');
+    stdout.write('    --publish publica un único archivo .md, .txt o .pdf autorizado localmente y con artifacts.publish; la confirmación indica qué archivo se envía.\n');
     stdout.write('  mycompany agent runtime files list | grant RUTA --operation=read|write | revoke RUTA --operation=read|write\n');
     stdout.write('    Administra permisos de archivos locales para la identidad Agent seleccionada. grant y revoke requieren confirmación escrita en un terminal interactivo.\n');
     stdout.write('    read expone el contenido al agente; write permite editarlo. La configuración y el historial permanecen privados en este PC; esto aún no inicia un proveedor.\n');

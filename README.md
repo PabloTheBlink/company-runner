@@ -154,7 +154,15 @@ The command fetches the active Agent identity and task, then asks for an exact i
 
 The CLI stages only granted paths in a private temporary directory under the user's private MyCompanies config directory. It invokes `agy` without a shell, forces the terminal sandbox, disables non-workspace file access, and denies shell commands, unsandboxed commands, web actions, and MCP tools for that session. The task description is passed over stdin rather than exposed as process arguments. If the host sandbox cannot be verified, the provider is not started. On success, the CLI rechecks write grants and original file hashes, then applies only staged changes to exact `write` paths; extra files are discarded. Timeout, interruption, provider error, or invalid output applies no changes. The staging directory is removed after the run.
 
-The result is printed in the terminal; this local run does not change task status, create a server-side Execution record, or publish a report. Codex and Claude Code remain detection/preflight only. The first implementation uses Antigravity's documented [headless mode](https://antigravity.google/docs/cli/headless/), [sandbox](https://antigravity.google/docs/cli/sandbox), and [permission rules](https://antigravity.google/docs/cli/permissions); see `mycompany help` for the current CLI surface.
+Without `--publish`, the result is printed in the terminal; this local run does not change task status, create a server-side Execution record, or publish a report. Codex and Claude Code remain detection/preflight only. The first implementation uses Antigravity's documented [headless mode](https://antigravity.google/docs/cli/headless/), [sandbox](https://antigravity.google/docs/cli/sandbox), and [permission rules](https://antigravity.google/docs/cli/permissions); see `mycompany help` for the current CLI surface.
+
+To publish one generated report, pass its exact relative path:
+
+```sh
+mycompany agent runtime run 42 --provider=agy --publish=reports/daily.md
+```
+
+The selected Agent must have the server permission `artifacts.publish`, and the same exact path must have a local `write` grant. The file must be `.md`, `.txt`, or `.pdf`; the CLI includes it in the written confirmation and publishes it only after the local write checks succeed. Publication uses the existing authenticated artifact API. If upload fails, local authorized changes remain in the company folder and the CLI reports the upload error.
 
 ## Credential storage
 
