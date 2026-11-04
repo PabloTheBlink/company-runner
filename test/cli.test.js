@@ -289,6 +289,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany init/);
     assert.match(output.value, /mycompany work/);
     assert.match(output.value, /mycompany tasks/);
+    assert.match(output.value, /mycompany tasks \[--status=open\|in_progress\|blocked\] \[--after=ID\]/);
     assert.match(output.value, /mycompany task ID/);
     assert.match(output.value, /mycompany agent login/);
     assert.match(output.value, /mycompany agent identities/);
@@ -418,6 +419,51 @@ test('credential listing shows actor type and names without printing token mater
     }
 });
 
+test('tasks command requests and labels only the selected active status', async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-task-filter-test-'));
+    const companyRoot = path.join(directory, 'company');
+    const configHome = path.join(directory, 'config');
+    const previousConfigHome = process.env.XDG_CONFIG_HOME;
+    await mkdir(companyRoot, { recursive: true });
+    const token = 'B'.repeat(80);
+    const server = createServer((request, response) => {
+        assert.equal(request.url, '/api/v1/runner/tasks?status=blocked');
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            tasks: [{
+                id: 18, title: 'Revisar bloqueo', status: 'blocked', priority: 'high', due_date: null,
+                assignee: null, workspace: { id: 9, name: 'Operaciones' },
+            }],
+            has_more: false, next_after: null,
+        }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const serverUrl = `http://127.0.0.1:${server.address().port}`;
+    const configStore = new ConfigStore(path.join(configHome, 'mycompanies', 'runner.json'));
+    await configStore.saveNew({
+        server_url: serverUrl, runner_id: 7, workspace_path: companyRoot,
+        allow_insecure_localhost: true, api_token: token,
+    });
+    process.env.XDG_CONFIG_HOME = configHome;
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+    const stderr = { value: '', write(chunk) { this.value += chunk; } };
+
+    try {
+        assert.equal(await run(['tasks', '--status=blocked'], { stdout, stderr }, companyRoot), 0);
+        assert.match(stdout.value, /Tareas activas · bloqueadas \(1\):/);
+        assert.match(stdout.value, /Revisar bloqueo/);
+        assert.equal(stderr.value, '');
+    } finally {
+        server.close();
+        await once(server, 'close');
+        if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previousConfigHome;
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test('init prepares the selected company root without Runner enrollment', async () => {
     const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-cli-test-'));
     try {
@@ -444,9 +490,13 @@ test('task detail accepts only a positive numeric task ID', () => {
 });
 
 test('task listing accepts one positive after cursor', () => {
-    assert.deepEqual(parseTasksOptions([]), { afterId: null });
-    assert.deepEqual(parseTasksOptions(['--after=100']), { afterId: 100 });
+    assert.deepEqual(parseTasksOptions([]), { afterId: null, status: null });
+    assert.deepEqual(parseTasksOptions(['--after=100']), { afterId: 100, status: null });
     assert.throws(() => parseTasksOptions(['--after=0']), /entero positivo/);
+    assert.deepEqual(parseTasksOptions(['--status=blocked']), { afterId: null, status: 'blocked' });
+    assert.deepEqual(parseTasksOptions(['--status=open', '--after=100']), { afterId: 100, status: 'open' });
+    assert.throws(() => parseTasksOptions(['--status=completed']), /estado activo/);
+    assert.throws(() => parseTasksOptions(['--status=blocked', '--status=open']), /Opción desconocida/);
     assert.throws(() => parseTasksOptions(['--all']), /Opción desconocida/);
 });
 

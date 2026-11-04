@@ -173,15 +173,21 @@ export class RunnerClient {
         };
     }
 
-    async listTasks(currentDirectory = process.cwd(), afterId = null) {
+    async listTasks(currentDirectory = process.cwd(), afterId = null, status = null) {
         if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
             throw new Error('El cursor de tareas debe ser un entero positivo.');
+        }
+        if (status !== null && !['open', 'in_progress', 'blocked'].includes(status)) {
+            throw new Error('El estado de tareas no es válido.');
         }
 
         const configuration = await this.configStore.loadForDirectory(currentDirectory);
         const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
-        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
-        const response = await this.getJson(`${serverUrl}/api/v1/runner/tasks${cursor}`, configuration.api_token);
+        const query = new URLSearchParams();
+        if (afterId !== null) query.set('after_id', String(afterId));
+        if (status !== null) query.set('status', status);
+        const queryString = query.size === 0 ? '' : `?${query.toString()}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/runner/tasks${queryString}`, configuration.api_token);
 
         if (response.status === 401) {
             throw new Error('La credencial Runner fue rechazada (HTTP 401). Comprueba si fue revocada.');

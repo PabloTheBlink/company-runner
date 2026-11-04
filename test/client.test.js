@@ -1711,6 +1711,48 @@ test('task listing sends a validated cursor and checks the next cursor response'
     });
 });
 
+test('task listing sends the selected active status together with its cursor', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const server = createServer((request, response) => {
+            assert.equal(request.url, '/api/v1/runner/tasks?after_id=100&status=blocked');
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                tasks: [{
+                    id: 101,
+                    title: 'Tarea bloqueada',
+                    status: 'blocked',
+                    priority: 'normal',
+                    due_date: null,
+                    assignee: null,
+                    workspace: { id: 9, name: 'Operaciones' },
+                }],
+                has_more: false,
+                next_after: null,
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: 'T'.repeat(80),
+        });
+
+        try {
+            const result = await new RunnerClient(configStore).listTasks(workspacePath, 100, 'blocked');
+            assert.equal(result.tasks[0].status, 'blocked');
+            assert.equal(result.tasks[0].id, 101);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('task detail fetches only the requested task through the authenticated runner API', async () => {
     await withTemporaryDirectory(async (directory) => {
         const workspacePath = path.join(directory, 'workspace');

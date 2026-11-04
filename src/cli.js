@@ -480,13 +480,15 @@ export async function run(argumentsList, streams = process, currentDirectory = p
 
     if (command === 'tasks') {
         const options = parseTasksOptions(argumentsAfterCommand);
-        const result = await client.listTasks(process.cwd(), options.afterId);
+        const result = await client.listTasks(currentDirectory, options.afterId, options.status);
         if (result.tasks.length === 0) {
-            streams.stdout.write('No hay tareas activas en los workspaces asignados.\n');
+            const statusLabel = options.status === null ? '' : ` con estado ${taskStatusLabel(options.status)}`;
+            streams.stdout.write(`No hay tareas activas${statusLabel} en los workspaces asignados.\n`);
             return 0;
         }
 
-        streams.stdout.write(`Tareas activas (${result.tasks.length}):\n`);
+        const statusLabel = options.status === null ? '' : ` · ${taskStatusLabel(options.status)}`;
+        streams.stdout.write(`Tareas activas${statusLabel} (${result.tasks.length}):\n`);
         for (const task of result.tasks) {
             const status = { open: 'abierta', in_progress: 'en curso', blocked: 'bloqueada' }[task.status];
             const priority = { low: 'baja', normal: 'normal', high: 'alta' }[task.priority];
@@ -494,7 +496,8 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`#${task.id} [${status} · ${priority}] ${safeTerminalText(task.workspace.name)} · ${safeTerminalText(task.title)}${dueDate} · responsable ${formatAssignee(task.assignee)}\n`);
         }
         if (result.has_more) {
-            streams.stdout.write(`Hay más tareas activas. Continúa con: mycompany tasks --after=${result.next_after}\n`);
+            const statusOption = options.status === null ? '' : ` --status=${options.status}`;
+            streams.stdout.write(`Hay más tareas activas. Continúa con: mycompany tasks --after=${result.next_after}${statusOption}\n`);
         }
         return 0;
     }
@@ -981,15 +984,25 @@ export function parseTaskId(value) {
 
 export function parseTasksOptions(argumentsList) {
     let afterId = null;
+    let status = null;
     for (const argument of argumentsList) {
         const match = /^--after=(.+)$/.exec(argument);
-        if (match === null || afterId !== null) {
-            throw new Error('Opción desconocida o repetida para tasks. Usa --after=ID.');
+        const statusMatch = /^--status=(.+)$/.exec(argument);
+        if (match !== null && afterId === null) {
+            afterId = parseTaskId(match[1]);
+            continue;
         }
-        afterId = parseTaskId(match[1]);
+        if (statusMatch !== null && status === null) {
+            if (!['open', 'in_progress', 'blocked'].includes(statusMatch[1])) {
+                throw new Error('El estado activo debe ser open, in_progress o blocked.');
+            }
+            status = statusMatch[1];
+            continue;
+        }
+        throw new Error('Opción desconocida o repetida para tasks. Usa --after=ID y --status=open|in_progress|blocked.');
     }
 
-    return { afterId };
+    return { afterId, status };
 }
 
 export function readHiddenCode(stdin, stderr) {
@@ -1072,7 +1085,7 @@ function printHelp(stdout) {
     stdout.write('  mycompany work\n');
     stdout.write('    Consulta si hay una comprobación autorizada de capacidad fija, comprueba acceso de lectura a la carpeta y devuelve solo ese resultado.\n');
     stdout.write('    No ejecuta código o comandos enviados por el servidor ni transmite la ruta local.\n');
-    stdout.write('  mycompany tasks [--after=ID]\n');
+    stdout.write('  mycompany tasks [--status=open|in_progress|blocked] [--after=ID]\n');
     stdout.write('    Consulta y lista tareas activas de los Workspaces asignados. Usa --after=ID para continuar una lista larga.\n');
     stdout.write('    Solo las muestra. No reclama, modifica, marca como terminadas ni ejecuta sus descripciones.\n');
     stdout.write('  mycompany task ID\n');
@@ -1160,6 +1173,10 @@ function printHelp(stdout) {
 
 function safeTerminalText(value) {
     return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
+}
+
+function taskStatusLabel(status) {
+    return { open: 'abiertas', in_progress: 'en curso', blocked: 'bloqueadas' }[status];
 }
 
 function formatCredentialActor(type, name) {
