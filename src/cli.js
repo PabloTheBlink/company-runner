@@ -3,7 +3,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config.js';
-import { RunnerClient } from './client.js';
+import { formatAssignee, RunnerClient } from './client.js';
 import { initializeCompanyRoot } from './company-kit.js';
 
 export async function run(argumentsList, streams = process, currentDirectory = process.cwd()) {
@@ -67,7 +67,7 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             const status = { open: 'abierta', in_progress: 'en curso', blocked: 'bloqueada' }[task.status];
             const priority = { low: 'baja', normal: 'normal', high: 'alta' }[task.priority];
             const dueDate = task.due_date === null ? '' : ` · vence ${task.due_date}`;
-            streams.stdout.write(`#${task.id} [${status} · ${priority}] ${safeTerminalText(task.workspace.name)} · ${safeTerminalText(task.title)}${dueDate}\n`);
+            streams.stdout.write(`#${task.id} [${status} · ${priority}] ${safeTerminalText(task.workspace.name)} · ${safeTerminalText(task.title)}${dueDate} · responsable ${formatAssignee(task.assignee)}\n`);
         }
         if (result.has_more) {
             streams.stdout.write(`Hay más tareas activas. Continúa con: mycompany tasks --after=${result.next_after}\n`);
@@ -84,6 +84,7 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         const dueDate = task.due_date === null ? 'sin fecha objetivo' : `vence ${task.due_date}`;
         streams.stdout.write(`#${task.id} · ${safeTerminalText(task.title)}\n`);
         streams.stdout.write(`Workspace: ${safeTerminalText(task.workspace.name)}\n`);
+        streams.stdout.write(`Responsable: ${formatAssignee(task.assignee)}\n`);
         streams.stdout.write(`Estado: ${status} · Prioridad: ${priority} · ${dueDate}\n`);
         if (task.description !== null && task.description !== '') {
             streams.stdout.write(`\n${safeTerminalText(task.description)}\n`);

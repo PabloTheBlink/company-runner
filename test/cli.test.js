@@ -5,6 +5,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
 import { parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { formatAssignee } from '../src/client.js';
+
+test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
+    assert.equal(formatAssignee(null), 'sin asignar');
+    assert.equal(formatAssignee({ type: 'user', name: 'Ana' }), 'Persona: Ana');
+    assert.equal(formatAssignee({ type: 'agent', name: 'Vera\u001B[31m' }), 'Agente: Vera [31m');
+});
 
 test('enrollment options use the current directory without a path option', () => {
     assert.deepEqual(parseEnrollOptions([

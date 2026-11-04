@@ -274,6 +274,7 @@ test('task listing requests the authenticated runner tasks without sending local
                     status: 'in_progress',
                     priority: 'high',
                     due_date: '2026-11-30',
+                    assignee: { type: 'agent', name: 'Vera' },
                     workspace: { id: 9, name: 'Operaciones' },
                 }],
                 has_more: false,
@@ -294,6 +295,7 @@ test('task listing requests the authenticated runner tasks without sending local
             assert.equal(tasks.has_more, false);
             assert.equal(tasks.next_after, null);
             assert.equal(tasks.tasks[0].title, 'Revisar métricas');
+            assert.deepEqual(tasks.tasks[0].assignee, { type: 'agent', name: 'Vera' });
             assert.equal(JSON.stringify(tasks).includes(workspacePath), false);
         } finally {
             server.close();
@@ -310,6 +312,45 @@ test('task listing rejects unexpected or malformed task response data', async ()
         const server = createServer((_request, response) => {
             response.writeHead(200, { 'content-type': 'application/json' });
             response.end(JSON.stringify({ tasks: [{ id: 1, title: 'Tarea sin estado' }], has_more: false, next_after: null }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: 'T'.repeat(80),
+        });
+
+        try {
+            await assert.rejects(new RunnerClient(configStore).listTasks(workspacePath), /respuesta de tareas no válida/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('task listing rejects malformed assignee identity data', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const server = createServer((_request, response) => {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                tasks: [{
+                    id: 1,
+                    title: 'Tarea',
+                    status: 'open',
+                    priority: 'normal',
+                    due_date: null,
+                    assignee: { type: 'shell', name: 'unexpected' },
+                    workspace: { id: 9, name: 'Operaciones' },
+                }],
+                has_more: false,
+                next_after: null,
+            }));
         });
         const serverUrl = await listen(server);
         await configStore.saveNew({
@@ -389,6 +430,7 @@ test('task detail fetches only the requested task through the authenticated runn
                     status: 'in_progress',
                     priority: 'high',
                     due_date: null,
+                    assignee: { type: 'user', name: 'Ana' },
                     workspace: { id: 9, name: 'Operaciones' },
                 },
             }));
@@ -405,6 +447,7 @@ test('task detail fetches only the requested task through the authenticated runn
         try {
             const task = await new RunnerClient(configStore).getTask(42, workspacePath);
             assert.equal(task.description, 'Comparar con las fuentes originales.');
+            assert.deepEqual(task.assignee, { type: 'user', name: 'Ana' });
             assert.equal(task.workspace.name, 'Operaciones');
             assert.equal(JSON.stringify(task).includes(workspacePath), false);
         } finally {

@@ -36,6 +36,15 @@ export function normalizeServerUrl(serverUrl, allowInsecureLocalhost = false) {
     return parsedUrl.origin;
 }
 
+export function formatAssignee(assignee) {
+    if (assignee === undefined || assignee === null) {
+        return 'sin asignar';
+    }
+
+    const kind = assignee.type === 'agent' ? 'Agente' : 'Persona';
+    return `${kind}: ${String(assignee.name).replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')}`;
+}
+
 export class RunnerClient {
     constructor(configStore, fetchImplementation = globalThis.fetch) {
         this.configStore = configStore;
@@ -299,6 +308,7 @@ function isRunnerTask(task, includeDescription = false) {
         && typeof task.title === 'string'
         && ['open', 'in_progress', 'blocked'].includes(task.status)
         && ['low', 'normal', 'high'].includes(task.priority)
+        && (task.assignee === undefined || task.assignee === null || isRunnerAssignee(task.assignee))
         && (!includeDescription || task.description === null || typeof task.description === 'string')
         && (task.due_date === null || /^\d{4}-\d{2}-\d{2}$/.test(task.due_date))
         && task.workspace !== null
@@ -306,6 +316,13 @@ function isRunnerTask(task, includeDescription = false) {
         && Number.isInteger(task.workspace.id)
         && task.workspace.id > 0
         && typeof task.workspace.name === 'string';
+}
+
+function isRunnerAssignee(assignee) {
+    return assignee !== null
+        && typeof assignee === 'object'
+        && ['user', 'agent'].includes(assignee.type)
+        && typeof assignee.name === 'string';
 }
 
 async function readResponseLimited(response, maximumBytes) {
