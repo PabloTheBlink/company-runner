@@ -6,6 +6,7 @@ import { ConfigStore } from './config.js';
 import { AgentClient, formatAssignee, RunnerClient } from './client.js';
 import { listLocalCapabilities } from './capabilities/devto-stats-totals.js';
 import { initializeCompanyRoot } from './company-kit.js';
+import { listLocalAgentRuntimes } from './runtime.js';
 
 export async function run(argumentsList, streams = process, currentDirectory = process.cwd(), configStore = new ConfigStore()) {
     const [command = 'help', ...argumentsAfterCommand] = argumentsList;
@@ -90,6 +91,18 @@ export async function run(argumentsList, streams = process, currentDirectory = p
     if (command === 'agent') {
         const [agentCommand, ...agentArguments] = argumentsAfterCommand;
         const agentClient = new AgentClient(configStore);
+        if (agentCommand === 'runtime') {
+            if (agentArguments.length !== 0) throw new Error('Uso: mycompany agent runtime. No admite opciones.');
+            const runtimes = await listLocalAgentRuntimes();
+            if (runtimes.length === 0) {
+                streams.stdout.write('No se encontró Codex ni Claude Code en PATH.\n');
+            } else {
+                streams.stdout.write(`Proveedores locales detectados: ${runtimes.map(({ provider, command }) => `${provider} (${command})`).join(', ')}.\n`);
+            }
+            streams.stdout.write('Diagnóstico local: no conecta con MyCompanies, no lee tareas ni credenciales y no inicia ninguna sesión.\n');
+            streams.stdout.write('Siguiente paso futuro: elegir Agent y tarea, comprobar grants, iniciar en sandbox limitado y devolver estado/resumen.\n');
+            return 0;
+        }
         if (agentCommand === 'login') {
             const options = parseAgentLoginOptions(agentArguments);
             streams.stderr.write('Credencial Agent (entrada oculta): ');
@@ -1154,6 +1167,8 @@ function printHelp(stdout) {
     stdout.write('    Lista las identidades guardadas para esta carpeta, marca la predeterminada y la seleccionada, sin conectar ni mostrar secretos.\n');
     stdout.write('  mycompany agent me\n');
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
+    stdout.write('  mycompany agent runtime\n');
+    stdout.write('    Detecta Codex y Claude Code en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
     stdout.write('  mycompany agent permissions\n');
     stdout.write('    Consulta el catálogo vigente de capacidades y los alcances que admiten.\n');
     stdout.write('  mycompany agent pause AGENT_ID | resume AGENT_ID\n');

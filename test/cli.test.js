@@ -9,6 +9,7 @@ import test from 'node:test';
 import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
+import { listLocalAgentRuntimes } from '../src/runtime.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
     assert.equal(formatAssignee(null), 'sin asignar');
@@ -43,6 +44,19 @@ test('agent login requires a server and supports explicit loopback HTTP only', (
     });
     assert.throws(() => parseAgentLoginOptions([]), /Falta el servidor/);
     assert.throws(() => parseAgentLoginOptions(['--server=https://example.com', '--token=secret']), /Opción desconocida/);
+});
+
+test('agent runtime reports installed providers without loading credentials or starting a session', async () => {
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+    const runtimes = await listLocalAgentRuntimes();
+
+    assert.equal(await run(['agent', 'runtime'], { stdout: output }, process.cwd(), {}), 0);
+    assert.match(output.value, /Diagnóstico local: no conecta con MyCompanies, no lee tareas ni credenciales y no inicia ninguna sesión/);
+    assert.match(output.value, /Siguiente paso futuro: elegir Agent y tarea/);
+    for (const runtime of runtimes) {
+        assert.match(output.value, new RegExp(`${runtime.provider} \\(${runtime.command}\\)`));
+    }
+    await assert.rejects(run(['agent', 'runtime', '--provider=codex'], { stdout: output }, process.cwd(), {}), /No admite opciones/);
 });
 
 test('agent task listing accepts a single positive cursor', () => {
