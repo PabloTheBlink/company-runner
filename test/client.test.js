@@ -1849,3 +1849,44 @@ test('Agent credential revocation validates the individual credential response',
         }
     });
 });
+
+test('Agent credential listing returns active and revoked metadata without requesting secrets', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const credentials = [{
+            id: 56, name: 'API report', issued_by_type: 'agent', issued_by_name: 'CEO',
+            created_at: '2026-11-04T10:00:00.000000Z', revoked_by_type: null, revoked_by_name: null, revoked_at: null,
+        }];
+        const server = createServer((request, response) => {
+            assert.equal(request.method, 'GET');
+            assert.equal(request.url, '/api/v1/agent/agents/12/credentials?after_id=55');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store, private' });
+            response.end(JSON.stringify({
+                agent: { id: 12, name: 'Marketing', status: 'paused' },
+                credentials, has_more: true, next_after: 56,
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl, agent_id: 1, agent_name: 'CEO', company_id: 4,
+            company_name: 'Devetty', company_root_path: companyRoot, allow_insecure_localhost: true, api_token: token,
+        });
+
+        try {
+            const result = await new AgentClient(configStore).listCredentials(12, 55, companyRoot);
+            assert.deepEqual(result.credentials, credentials);
+            assert.equal(result.agent.status, 'paused');
+            assert.equal(result.has_more, true);
+            assert.equal(result.next_after, 56);
+            assert.equal(JSON.stringify(result).includes('token_hash'), false);
+            assert.equal(JSON.stringify(result).includes('api_token'), false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});

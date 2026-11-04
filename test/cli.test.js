@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 
@@ -163,6 +163,14 @@ test('Agent credential issue and revoke require explicit target and validated na
     assert.throws(() => parseAgentCredentialRevokeOptions(['26', '0']), /entero positivo/);
 });
 
+test('Agent credential listing accepts one report ID and an optional cursor', () => {
+    assert.deepEqual(parseAgentCredentialListOptions(['26']), { agentId: 26, afterId: null });
+    assert.deepEqual(parseAgentCredentialListOptions(['26', '--after=91']), { agentId: 26, afterId: 91 });
+    assert.throws(() => parseAgentCredentialListOptions([]), /Uso:/);
+    assert.throws(() => parseAgentCredentialListOptions(['26', '--after=0']), /entero positivo/);
+    assert.throws(() => parseAgentCredentialListOptions(['26', '--after=91', '--after=92']), /Uso:/);
+});
+
 test('agent offer status accepts only supported lifecycle states', () => {
     assert.deepEqual(parseAgentOfferStatusOptions(['25', 'available']), { offerId: 25, status: 'available' });
     assert.throws(() => parseAgentOfferStatusOptions(['25', 'converted']), /estado no es válido/);
@@ -282,6 +290,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany task ID/);
     assert.match(output.value, /mycompany agent login/);
     assert.match(output.value, /mycompany agent identities/);
+    assert.match(output.value, /mycompany agent credential list AGENT_ID/);
     assert.match(output.value, /mycompany agent me/);
     assert.match(output.value, /mycompany agent tasks/);
     assert.match(output.value, /mycompany agent bets/);

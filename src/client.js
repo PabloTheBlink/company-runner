@@ -418,6 +418,49 @@ export class AgentClient {
         return response.body;
     }
 
+    async listCredentials(agentId, afterId = null, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(agentId) || agentId < 1) throw new Error('El ID de agente debe ser un entero positivo.');
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de credenciales debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(
+            `${serverUrl}/api/v1/agent/agents/${agentId}/credentials${cursor}`,
+            configuration.api_token,
+        );
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        if (response.status === 403) throw new Error('El agente necesita agents.credentials.manage para consultar credenciales (HTTP 403).');
+        if (response.status === 404) throw new Error('El destino no es un reporte directo de esta empresa (HTTP 404).');
+        if (response.status === 422) throw new Error('MyCompanies rechazó el cursor de credenciales (HTTP 422).');
+        if (response.status === 429) throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        const { agent, credentials, has_more: hasMore, next_after: nextAfter } = response.body;
+        if (response.status !== 200
+            || agent?.id !== agentId
+            || typeof agent.name !== 'string'
+            || !['active', 'paused'].includes(agent.status)
+            || !Array.isArray(credentials)
+            || credentials.length > 100
+            || credentials.some((credential) => credential === null
+                || typeof credential !== 'object'
+                || !Number.isSafeInteger(credential.id)
+                || typeof credential.name !== 'string'
+                || !(credential.issued_by_type === null || typeof credential.issued_by_type === 'string')
+                || !(credential.issued_by_name === null || typeof credential.issued_by_name === 'string')
+                || typeof credential.created_at !== 'string'
+                || !(credential.revoked_by_type === null || typeof credential.revoked_by_type === 'string')
+                || !(credential.revoked_by_name === null || typeof credential.revoked_by_name === 'string')
+                || !(credential.revoked_at === null || typeof credential.revoked_at === 'string')
+                || Object.hasOwn(credential, 'token_hash')
+                || Object.hasOwn(credential, 'api_token'))
+            || typeof hasMore !== 'boolean'
+            || (hasMore ? (!Number.isSafeInteger(nextAfter) || nextAfter < 1) : nextAfter !== null)) {
+            throw new Error('MyCompanies devolvió un historial de credenciales no válido.');
+        }
+        return response.body;
+    }
+
     async publishArtifact(filePath, metadata, currentDirectory = process.cwd()) {
         if (typeof filePath !== 'string' || filePath.trim() === '') {
             throw new Error('Indica el archivo concreto que quieres publicar.');
@@ -1725,7 +1768,7 @@ export class AgentClient {
             throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
         }
         if (response.status !== 200) {
-            if ([401, 403, 404, 429].includes(response.status)) return { status: response.status, body: {} };
+            if ([401, 403, 404, 422, 429].includes(response.status)) return { status: response.status, body: {} };
             throw new Error(`MyCompanies devolvió un error HTTP ${response.status}.`);
         }
         let responseText;

@@ -138,6 +138,23 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`Credencial #${result.credential_id} guardada localmente para el agente #${result.agent.id} ${safeTerminalText(result.agent.name)}. El secreto no se muestra.\n`);
             return 0;
         }
+        if (agentCommand === 'credential' && agentArguments[0] === 'list') {
+            const options = parseAgentCredentialListOptions(agentArguments.slice(1));
+            const result = await agentClient.listCredentials(options.agentId, options.afterId, currentDirectory);
+            if (result.credentials.length === 0) {
+                streams.stdout.write(`El agente #${result.agent.id} ${safeTerminalText(result.agent.name)} no tiene credenciales en esta página.\n`);
+                return 0;
+            }
+            streams.stdout.write(`Credenciales del agente #${result.agent.id} ${safeTerminalText(result.agent.name)} (${result.agent.status}):\n`);
+            for (const credential of result.credentials) {
+                const state = credential.revoked_at === null
+                    ? 'activa'
+                    : `revocada ${safeTerminalText(credential.revoked_at)} por ${safeTerminalText(credential.revoked_by_name ?? 'desconocido')}`;
+                streams.stdout.write(`#${credential.id} [${state}] ${safeTerminalText(credential.name)} · emitida por ${safeTerminalText(credential.issued_by_name ?? 'desconocido')} · ${safeTerminalText(credential.created_at)}\n`);
+            }
+            if (result.has_more) streams.stdout.write(`Hay más credenciales. Continúa con: mycompany agent credential list ${options.agentId} --after=${result.next_after}\n`);
+            return 0;
+        }
         if (agentCommand === 'credential' && agentArguments[0] === 'revoke') {
             const options = parseAgentCredentialRevokeOptions(agentArguments.slice(1));
             await agentClient.revokeCredential(options.agentId, options.credentialId, currentDirectory);
@@ -712,6 +729,18 @@ export function parseAgentCredentialRevokeOptions(argumentsList) {
     return { agentId: parseTaskId(argumentsList[0]), credentialId: parseTaskId(argumentsList[1]) };
 }
 
+export function parseAgentCredentialListOptions(argumentsList) {
+    if (argumentsList.length < 1 || argumentsList.length > 2) {
+        throw new Error('Uso: mycompany agent credential list AGENT_ID [--after=ID].');
+    }
+    const agentId = parseTaskId(argumentsList[0]);
+    if (argumentsList.length === 1) return { agentId, afterId: null };
+    const match = /^--after=(.+)$/.exec(argumentsList[1]);
+    if (match === null) throw new Error('Opción desconocida para credential list. Usa --after=ID.');
+    const afterId = parseTaskId(match[1]);
+    return { agentId, afterId };
+}
+
 export function parseAgentPermissionRevokeOptions(argumentsList) {
     if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent permission revoke AGENT_ID GRANT_ID.');
     return { agentId: parseTaskId(argumentsList[0]), grantId: parseTaskId(argumentsList[1]) };
@@ -1065,8 +1094,8 @@ function printHelp(stdout) {
     stdout.write('    Pausa o reactiva un reporte directo con agents.manage; pausar revoca sus permisos delegados descendientes.\n');
     stdout.write('  mycompany agent edit AGENT_ID [--role=ROL] [--instructions=TEXTO]\n');
     stdout.write('    Actualiza solo rol e instrucciones de un reporte directo; usa none para borrar uno de esos campos. Requiere agents.manage.\n');
-    stdout.write('  mycompany agent credential issue AGENT_ID --name=NOMBRE | credential revoke AGENT_ID CREDENTIAL_ID\n');
-    stdout.write('    Emite una credencial para un reporte directo con agents.credentials.manage y la guarda localmente sin mostrar el secreto; también revoca una credencial concreta.\n');
+    stdout.write('  mycompany agent credential list AGENT_ID [--after=ID] | issue AGENT_ID --name=NOMBRE | revoke AGENT_ID CREDENTIAL_ID\n');
+    stdout.write('    Lista solo metadatos, o emite/revoca una credencial de un reporte directo con agents.credentials.manage. La emisión guarda el secreto localmente sin mostrarlo.\n');
     stdout.write('  mycompany agent tasks [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');
