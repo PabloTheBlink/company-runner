@@ -160,10 +160,15 @@ export class RunnerClient {
         };
     }
 
-    async listTasks(currentDirectory = process.cwd()) {
+    async listTasks(currentDirectory = process.cwd(), afterId = null) {
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de tareas debe ser un entero positivo.');
+        }
+
         const configuration = await this.configStore.loadForDirectory(currentDirectory);
         const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
-        const response = await this.getJson(`${serverUrl}/api/v1/runner/tasks`, configuration.api_token);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/runner/tasks${cursor}`, configuration.api_token);
 
         if (response.status === 401) {
             throw new Error('La credencial Runner fue rechazada (HTTP 401). Comprueba si fue revocada.');
@@ -172,7 +177,12 @@ export class RunnerClient {
             || !Array.isArray(response.body.tasks)
             || response.body.tasks.length > 100
             || typeof response.body.has_more !== 'boolean'
-            || response.body.tasks.some((task) => !isRunnerTask(task))) {
+            || response.body.tasks.some((task) => !isRunnerTask(task))
+            || (response.body.has_more
+                ? !Number.isInteger(response.body.next_after)
+                    || response.body.next_after < 1
+                    || response.body.tasks.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
             throw new Error('MyCompanies devolvió una respuesta de tareas no válida.');
         }
 

@@ -47,8 +47,8 @@ export async function run(argumentsList, streams = process) {
     }
 
     if (command === 'tasks') {
-        if (argumentsAfterCommand.length !== 0) throw new Error('tasks no admite opciones.');
-        const result = await client.listTasks();
+        const options = parseTasksOptions(argumentsAfterCommand);
+        const result = await client.listTasks(process.cwd(), options.afterId);
         if (result.tasks.length === 0) {
             streams.stdout.write('No hay tareas activas en los workspaces asignados.\n');
             return 0;
@@ -62,7 +62,7 @@ export async function run(argumentsList, streams = process) {
             streams.stdout.write(`#${task.id} [${status} · ${priority}] ${safeTerminalText(task.workspace.name)} · ${safeTerminalText(task.title)}${dueDate}\n`);
         }
         if (result.has_more) {
-            streams.stdout.write('Hay más de 100 tareas activas; limita el trabajo a las primeras 100 mostradas.\n');
+            streams.stdout.write(`Hay más tareas activas. Continúa con: mycompany tasks --after=${result.next_after}\n`);
         }
         return 0;
     }
@@ -130,6 +130,19 @@ export function parseTaskId(value) {
     }
 
     return taskId;
+}
+
+export function parseTasksOptions(argumentsList) {
+    let afterId = null;
+    for (const argument of argumentsList) {
+        const match = /^--after=(.+)$/.exec(argument);
+        if (match === null || afterId !== null) {
+            throw new Error('Opción desconocida o repetida para tasks. Usa --after=ID.');
+        }
+        afterId = parseTaskId(match[1]);
+    }
+
+    return { afterId };
 }
 
 export function readHiddenCode(stdin, stderr) {
@@ -200,7 +213,7 @@ function printHelp(stdout) {
     stdout.write('  mycompany enroll --server=URL [--allow-insecure-localhost]\n');
     stdout.write('  mycompany heartbeat\n');
     stdout.write('  mycompany work\n');
-    stdout.write('  mycompany tasks\n');
+    stdout.write('  mycompany tasks [--after=ID]\n');
     stdout.write('  mycompany task ID\n');
     stdout.write('  mycompany forget\n');
 }

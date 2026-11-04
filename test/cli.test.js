@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseEnrollOptions, parseTaskId, readHiddenCode, run } from '../src/cli.js';
+import { parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 
 test('enrollment options use the current directory without a path option', () => {
     assert.deepEqual(parseEnrollOptions([
@@ -41,6 +41,13 @@ test('task detail accepts only a positive numeric task ID', () => {
     assert.throws(() => parseTaskId('0'), /entero positivo/);
     assert.throws(() => parseTaskId('4abc'), /entero positivo/);
     assert.throws(() => parseTaskId('9007199254740992'), /entero positivo/);
+});
+
+test('task listing accepts one positive after cursor', () => {
+    assert.deepEqual(parseTasksOptions([]), { afterId: null });
+    assert.deepEqual(parseTasksOptions(['--after=100']), { afterId: 100 });
+    assert.throws(() => parseTasksOptions(['--after=0']), /entero positivo/);
+    assert.throws(() => parseTasksOptions(['--all']), /Opción desconocida/);
 });
 
 test('enrollment code input disables terminal echo and restores the prior mode', async () => {
