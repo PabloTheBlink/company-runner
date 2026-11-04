@@ -46,10 +46,14 @@ test('agent login requires a server and supports explicit loopback HTTP only', (
 });
 
 test('agent task listing accepts a single positive cursor', () => {
-    assert.deepEqual(parseAgentTasksOptions([]), { afterId: null });
-    assert.deepEqual(parseAgentTasksOptions(['--after=25']), { afterId: 25 });
+    assert.deepEqual(parseAgentTasksOptions([]), { afterId: null, status: null });
+    assert.deepEqual(parseAgentTasksOptions(['--after=25']), { afterId: 25, status: null });
     assert.throws(() => parseAgentTasksOptions(['--after=0']), /entero positivo/);
     assert.throws(() => parseAgentTasksOptions(['--after=25', '--after=50']), /Opción desconocida/);
+    assert.deepEqual(parseAgentTasksOptions(['--status=blocked']), { afterId: null, status: 'blocked' });
+    assert.deepEqual(parseAgentTasksOptions(['--status=in_progress', '--after=25']), { afterId: 25, status: 'in_progress' });
+    assert.throws(() => parseAgentTasksOptions(['--status=completed']), /estado activo/);
+    assert.throws(() => parseAgentTasksOptions(['--status=blocked', '--status=open']), /Opción desconocida/);
 });
 
 test('agent bet listing accepts a single positive cursor', () => {
@@ -460,6 +464,55 @@ test('tasks command requests and labels only the selected active status', async 
         await once(server, 'close');
         if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
         else process.env.XDG_CONFIG_HOME = previousConfigHome;
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('agent tasks command requests and labels only the selected active status', async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-task-filter-test-'));
+    const companyRoot = path.join(directory, 'company');
+    const configHome = path.join(directory, 'config');
+    const previousConfigHome = process.env.XDG_CONFIG_HOME;
+    const previousAgentId = process.env.MYCOMPANY_AGENT_ID;
+    await mkdir(companyRoot, { recursive: true });
+    const token = 'C'.repeat(80);
+    const server = createServer((request, response) => {
+        assert.equal(request.url, '/api/v1/agent/tasks?status=blocked');
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            tasks: [{
+                id: 19, title: 'Resolver bloqueo', status: 'blocked', priority: 'normal', due_date: null,
+                assignee: null, workspace: null,
+            }],
+            has_more: false, next_after: null,
+        }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const configStore = new ConfigStore(path.join(configHome, 'mycompanies', 'runner.json'));
+    await configStore.saveAgent({
+        server_url: `http://127.0.0.1:${server.address().port}`, agent_id: 12, agent_name: 'Vera',
+        company_id: 4, company_name: 'Devetty', company_root_path: companyRoot,
+        allow_insecure_localhost: true, api_token: token,
+    });
+    process.env.XDG_CONFIG_HOME = configHome;
+    delete process.env.MYCOMPANY_AGENT_ID;
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+    const stderr = { value: '', write(chunk) { this.value += chunk; } };
+
+    try {
+        assert.equal(await run(['agent', 'tasks', '--status=blocked'], { stdout, stderr }, companyRoot), 0);
+        assert.match(stdout.value, /Tareas del agente · bloqueadas \(1\):/);
+        assert.match(stdout.value, /Resolver bloqueo/);
+        assert.equal(stderr.value, '');
+    } finally {
+        server.close();
+        await once(server, 'close');
+        if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previousConfigHome;
+        if (previousAgentId === undefined) delete process.env.MYCOMPANY_AGENT_ID;
+        else process.env.MYCOMPANY_AGENT_ID = previousAgentId;
         await rm(directory, { recursive: true, force: true });
     }
 });

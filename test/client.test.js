@@ -124,7 +124,7 @@ test('agent login verifies identity before storing its credential separately fro
     });
 });
 
-test('agent task listing uses the Agent credential, cursor and company scope returned by MyCompanies', async () => {
+test('agent task listing uses the Agent credential, status filter and cursor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
         await mkdir(companyRoot);
@@ -133,7 +133,7 @@ test('agent task listing uses the Agent credential, cursor and company scope ret
         let requestCount = 0;
         const server = createServer((request, response) => {
             requestCount++;
-            assert.equal(request.url, '/api/v1/agent/tasks?after_id=25');
+            assert.equal(request.url, '/api/v1/agent/tasks?after_id=25&status=blocked');
             assert.equal(request.headers.authorization, `Bearer ${token}`);
             response.writeHead(200, { 'content-type': 'application/json' });
             response.end(JSON.stringify({
@@ -163,7 +163,7 @@ test('agent task listing uses the Agent credential, cursor and company scope ret
         });
 
         try {
-            const tasks = await new AgentClient(configStore).listTasks(companyRoot, 25);
+            const tasks = await new AgentClient(configStore).listTasks(companyRoot, 25, 'blocked');
             assert.equal(tasks.tasks[0].id, 26);
             assert.equal(tasks.tasks[0].workspace, null);
             assert.equal(requestCount, 1);

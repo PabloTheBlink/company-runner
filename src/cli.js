@@ -163,12 +163,14 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         }
         if (agentCommand === 'tasks') {
             const options = parseAgentTasksOptions(agentArguments);
-            const result = await agentClient.listTasks(currentDirectory, options.afterId);
+            const result = await agentClient.listTasks(currentDirectory, options.afterId, options.status);
             if (result.tasks.length === 0) {
-                streams.stdout.write('El agente no tiene tareas activas en su ámbito.\n');
+                const statusLabel = options.status === null ? '' : ` con estado ${taskStatusLabel(options.status)}`;
+                streams.stdout.write(`El agente no tiene tareas activas${statusLabel} en su ámbito.\n`);
                 return 0;
             }
-            streams.stdout.write(`Tareas del agente (${result.tasks.length}):\n`);
+            const statusLabel = options.status === null ? '' : ` · ${taskStatusLabel(options.status)}`;
+            streams.stdout.write(`Tareas del agente${statusLabel} (${result.tasks.length}):\n`);
             for (const task of result.tasks) {
                 const status = { open: 'abierta', in_progress: 'en curso', blocked: 'bloqueada' }[task.status];
                 const priority = { low: 'baja', normal: 'normal', high: 'alta' }[task.priority];
@@ -177,7 +179,8 @@ export async function run(argumentsList, streams = process, currentDirectory = p
                 streams.stdout.write(`#${task.id} [${status} · ${priority}] ${workspaceName} · ${safeTerminalText(task.title)}${dueDate} · responsable ${formatAssignee(task.assignee)}\n`);
             }
             if (result.has_more) {
-                streams.stdout.write(`Hay más tareas dentro del ámbito del agente. Continúa con: mycompany agent tasks --after=${result.next_after}\n`);
+                const statusOption = options.status === null ? '' : ` --status=${options.status}`;
+                streams.stdout.write(`Hay más tareas dentro del ámbito del agente. Continúa con: mycompany agent tasks --after=${result.next_after}${statusOption}\n`);
             }
             return 0;
         }
@@ -575,11 +578,26 @@ export function parseAgentLoginOptions(argumentsList) {
 }
 
 export function parseAgentTasksOptions(argumentsList) {
-    if (argumentsList.length === 0) return { afterId: null };
-    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent tasks. Usa --after=ID.');
-    const match = /^--after=(.+)$/.exec(argumentsList[0]);
-    if (match === null) throw new Error('Opción desconocida para agent tasks. Usa --after=ID.');
-    return { afterId: parseTaskId(match[1]) };
+    let afterId = null;
+    let status = null;
+    for (const argument of argumentsList) {
+        const cursorMatch = /^--after=(.+)$/.exec(argument);
+        const statusMatch = /^--status=(.+)$/.exec(argument);
+        if (cursorMatch !== null && afterId === null) {
+            afterId = parseTaskId(cursorMatch[1]);
+            continue;
+        }
+        if (statusMatch !== null && status === null) {
+            if (!['open', 'in_progress', 'blocked'].includes(statusMatch[1])) {
+                throw new Error('El estado activo debe ser open, in_progress o blocked.');
+            }
+            status = statusMatch[1];
+            continue;
+        }
+        throw new Error('Opción desconocida o repetida para agent tasks. Usa --after=ID y --status=open|in_progress|blocked.');
+    }
+
+    return { afterId, status };
 }
 
 export function parseAgentBetsOptions(argumentsList) {
@@ -1109,7 +1127,7 @@ function printHelp(stdout) {
     stdout.write('    Actualiza solo rol e instrucciones de un reporte directo; usa none para borrar uno de esos campos. Requiere agents.manage.\n');
     stdout.write('  mycompany agent credential list AGENT_ID [--after=ID] | issue AGENT_ID --name=NOMBRE | revoke AGENT_ID CREDENTIAL_ID\n');
     stdout.write('    Lista solo metadatos, o emite/revoca una credencial de un reporte directo con agents.credentials.manage. La emisión guarda el secreto localmente sin mostrarlo.\n');
-    stdout.write('  mycompany agent tasks [--after=ID]\n');
+    stdout.write('  mycompany agent tasks [--status=open|in_progress|blocked] [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');
     stdout.write('    Lista apuestas de la empresa con bets.read o bets.manage. Solo muestra título y estado.\n');
