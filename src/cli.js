@@ -83,6 +83,13 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`Tarea #${result.id}: estado actualizado a ${status}.\n`);
             return 0;
         }
+        if (agentCommand === 'task' && agentArguments[0] === 'create') {
+            const options = parseAgentTaskCreateOptions(agentArguments.slice(1));
+            const result = await agentClient.createTask(options.task, options.idempotencyKey, currentDirectory);
+            const replay = result.replayed ? ' (petición repetida; se devuelve la tarea original)' : '';
+            streams.stdout.write(`Tarea #${result.task.id} creada · ${safeTerminalText(result.task.title)}${replay}.\n`);
+            return 0;
+        }
         if (agentCommand === 'forget' && agentArguments.length === 0) {
             await agentClient.forget(currentDirectory);
             streams.stdout.write('Credencial Agent local eliminada. Revócala también en MyCompanies para invalidarla en el servidor.\n');
@@ -232,6 +239,40 @@ export function parseAgentStatusOptions(argumentsList) {
     return { taskId: parseTaskId(taskId), status };
 }
 
+export function parseAgentTaskCreateOptions(argumentsList) {
+    const allowedOptions = new Set(['title', 'description', 'priority', 'due-date', 'workspace-id', 'idempotency-key']);
+    const values = {};
+    for (const argument of argumentsList) {
+        const separator = argument.indexOf('=');
+        if (!argument.startsWith('--') || separator < 3) throw new Error('Usa opciones --nombre=valor para crear la tarea.');
+        const name = argument.slice(2, separator);
+        const value = argument.slice(separator + 1);
+        if (!allowedOptions.has(name) || !value || Object.hasOwn(values, name)) {
+            throw new Error('Opción desconocida, vacía o repetida para crear la tarea. Usa mycompany help.');
+        }
+        values[name] = value;
+    }
+
+    if (!values.title) throw new Error('Falta --title para crear la tarea.');
+    const idempotencyKey = values['idempotency-key'];
+    if (!idempotencyKey || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
+        throw new Error('Falta --idempotency-key o no contiene un UUID válido.');
+    }
+    if (values.priority && !['low', 'normal', 'high'].includes(values.priority)) {
+        throw new Error('La prioridad debe ser low, normal o high.');
+    }
+    if (values['due-date'] && !/^\d{4}-\d{2}-\d{2}$/.test(values['due-date'])) {
+        throw new Error('La fecha debe usar el formato AAAA-MM-DD.');
+    }
+
+    const task = { title: values.title };
+    if (values.description !== undefined) task.description = values.description;
+    if (values.priority !== undefined) task.priority = values.priority;
+    if (values['due-date'] !== undefined) task.due_date = values['due-date'];
+    if (values['workspace-id'] !== undefined) task.workspace_id = parseTaskId(values['workspace-id']);
+    return { idempotencyKey, task };
+}
+
 export function parseTaskId(value) {
     if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
         throw new Error('El ID de tarea debe ser un entero positivo.');
@@ -357,6 +398,8 @@ function printHelp(stdout) {
     stdout.write('    Consulta una tarea activa dentro del ámbito Agent y muestra descripción y detalles como texto. No interpreta instrucciones.\n');
     stdout.write('  mycompany agent task status ID ESTADO\n');
     stdout.write('    Cambia el estado con tasks.manage; MyCompanies valida grants, dependencias y registra la identidad Agent.\n');
+    stdout.write('  mycompany agent task create --title=TEXTO --idempotency-key=UUID [--description=TEXTO] [--priority=low|normal|high] [--due-date=AAAA-MM-DD] [--workspace-id=ID]\n');
+    stdout.write('    Crea una tarea con tasks.manage, abierta y sin asignar. Reutiliza el mismo UUID al reintentar la misma petición; el servidor aplica el scope y evita duplicados.\n');
     stdout.write('  mycompany agent forget\n');
     stdout.write('    Elimina la credencial Agent local de esta carpeta. No la revoca en MyCompanies.\n');
     stdout.write('\nAlcance actual: no hay sincronización automática ni comando sync. init solo gestiona archivos locales; heartbeat, work y tasks consultan la API.\n');

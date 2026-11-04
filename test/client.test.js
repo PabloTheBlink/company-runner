@@ -262,6 +262,66 @@ test('agent status update sends the explicit status to the scoped Agent endpoint
     });
 });
 
+test('agent task creation sends a stable idempotency key and returns the server result', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const idempotencyKey = '94030b4e-0580-42f6-96d6-cb2b2fe7b457';
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'POST');
+            assert.equal(request.url, '/api/v1/agent/tasks');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            assert.equal(request.headers['idempotency-key'], idempotencyKey);
+            let requestBody = '';
+            for await (const chunk of request) requestBody += chunk;
+            assert.deepEqual(JSON.parse(requestBody), {
+                title: 'Revisar el informe',
+                description: null,
+                priority: 'high',
+                due_date: null,
+                workspace_id: null,
+            });
+            response.writeHead(201, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                task: {
+                    id: 27,
+                    title: 'Revisar el informe',
+                    description: null,
+                    status: 'open',
+                    priority: 'high',
+                    due_date: null,
+                    workspace: null,
+                },
+                created_by: { type: 'agent', id: 12, name: 'Vera' },
+                replayed: false,
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const result = await new AgentClient(configStore).createTask({ title: 'Revisar el informe', priority: 'high' }, idempotencyKey, companyRoot);
+            assert.equal(result.task.id, 27);
+            assert.equal(result.replayed, false);
+            await assert.rejects(new AgentClient(configStore).createTask({ title: 'Otra' }, 'bad-key', companyRoot), /UUID/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('heartbeat does not follow redirects or expose the token in errors', async () => {
     await withTemporaryDirectory(async (directory) => {
         const workspacePath = path.join(directory, 'workspace');

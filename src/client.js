@@ -433,6 +433,87 @@ export class AgentClient {
         return response.body.task;
     }
 
+    async createTask(taskData, idempotencyKey, currentDirectory = process.cwd()) {
+        if (typeof idempotencyKey !== 'string'
+            || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
+            throw new Error('La clave de idempotencia debe ser un UUID válido.');
+        }
+        if (taskData === null || typeof taskData !== 'object' || typeof taskData.title !== 'string' || taskData.title.trim() === '') {
+            throw new Error('El título de la tarea es obligatorio.');
+        }
+        const payload = {
+            title: taskData.title,
+            description: taskData.description ?? null,
+            priority: taskData.priority ?? 'normal',
+            due_date: taskData.due_date ?? null,
+            workspace_id: taskData.workspace_id ?? null,
+        };
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(`${serverUrl}/api/v1/agent/tasks`, payload, configuration.api_token, idempotencyKey);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene el permiso tasks.manage para este ámbito (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El workspace no existe o no está disponible para este agente.');
+        }
+        if (response.status === 409) {
+            throw new Error('La clave UUID ya se usó con datos distintos. Usa otra clave para crear una tarea nueva.');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó la tarea. Revisa los campos y el ámbito del workspace (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (![200, 201].includes(response.status)
+            || !isCreatedAgentTask(response.body.task)
+            || typeof response.body.replayed !== 'boolean') {
+            throw new Error('MyCompanies devolvió una respuesta de creación Agent no válida.');
+        }
+        return response.body;
+    }
+
+    async postJson(endpoint, payload, apiToken, idempotencyKey) {
+        let response;
+        try {
+            response = await this.fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${apiToken}`,
+                    'Idempotency-Key': idempotencyKey,
+                },
+                body: JSON.stringify(payload),
+                redirect: 'manual',
+                signal: AbortSignal.timeout(10_000),
+            });
+        } catch {
+            throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
+        }
+        if (![200, 201, 401, 403, 404, 409, 422, 429].includes(response.status)) {
+            throw new Error(`MyCompanies devolvió un error HTTP ${response.status}.`);
+        }
+        if (![200, 201].includes(response.status)) return { status: response.status, body: {} };
+        let responseText;
+        try {
+            responseText = await readResponseLimited(response, MAX_RESPONSE_BYTES);
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta demasiado grande o no válida.');
+        }
+        try {
+            const body = JSON.parse(responseText);
+            if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid response shape.');
+            return { status: response.status, body };
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
+        }
+    }
+
     async patchJson(endpoint, payload, apiToken) {
         let response;
         try {
@@ -562,6 +643,23 @@ function isAgentTask(task, includeDescription = false) {
         && ['low', 'normal', 'high'].includes(task.priority)
         && (!includeDescription || task.description === null || typeof task.description === 'string')
         && (task.assignee === null || isRunnerAssignee(task.assignee))
+        && (task.due_date === null || /^\d{4}-\d{2}-\d{2}$/.test(task.due_date))
+        && (task.workspace === null
+            || (typeof task.workspace === 'object'
+                && Number.isInteger(task.workspace.id)
+                && task.workspace.id > 0
+                && typeof task.workspace.name === 'string'));
+}
+
+function isCreatedAgentTask(task) {
+    return task !== null
+        && typeof task === 'object'
+        && Number.isInteger(task.id)
+        && task.id > 0
+        && typeof task.title === 'string'
+        && task.status === 'open'
+        && ['low', 'normal', 'high'].includes(task.priority)
+        && (task.description === null || typeof task.description === 'string')
         && (task.due_date === null || /^\d{4}-\d{2}-\d{2}$/.test(task.due_date))
         && (task.workspace === null
             || (typeof task.workspace === 'object'
