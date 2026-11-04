@@ -47,13 +47,25 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`Informe #${artifact.id} publicado para ${safeTerminalText(artifact.title)} (${safeTerminalText(artifact.original_filename)}).\n`);
             return 0;
         }
+        if (artifactCommand === 'show') {
+            const artifactId = parseArtifactId(artifactArguments);
+            const artifact = await agentClient.getArtifact(artifactId, currentDirectory);
+            streams.stdout.write(`Informe #${artifact.id}: ${safeTerminalText(artifact.title)}\n`);
+            streams.stdout.write(`Archivo: ${safeTerminalText(artifact.original_filename)} · ${(artifact.size_bytes / 1024).toFixed(1)} KB · ${safeTerminalText(artifact.mime_type)}\n`);
+            streams.stdout.write(`Fecha: ${safeTerminalText(artifact.created_at)}\n`);
+            if (artifact.description !== null) streams.stdout.write(`Descripción: ${safeTerminalText(artifact.description)}\n`);
+            if (artifact.source !== null) streams.stdout.write(`Origen: ${safeTerminalText(artifact.source)}\n`);
+            if (artifact.uploaded_by !== null) streams.stdout.write(`Publicado por: Agente ${safeTerminalText(artifact.uploaded_by.name)}\n`);
+            streams.stdout.write(`SHA-256: ${artifact.sha256}\n`);
+            return 0;
+        }
         if (artifactCommand === 'download') {
             const options = parseArtifactDownloadOptions(artifactArguments);
             const result = await agentClient.downloadArtifact(options.artifactId, options.outputPath, currentDirectory);
             streams.stdout.write(`Informe #${options.artifactId} descargado en ${safeTerminalText(result.outputPath)}.\n`);
             return 0;
         }
-        throw new Error('Uso: mycompany artifact publish FILE --title=TEXTO | mycompany artifact download ID --output=FILE.');
+        throw new Error('Uso: mycompany artifact show ID | mycompany artifact publish FILE --title=TEXTO | mycompany artifact download ID --output=FILE.');
     }
 
     const configStore = new ConfigStore();
@@ -443,18 +455,34 @@ export function parseArtifactListOptions(argumentsList) {
     if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para artifacts. Usa --after=ID.');
     const match = /^--after=(.+)$/.exec(argumentsList[0]);
     if (match === null) throw new Error('Opción desconocida para artifacts. Usa --after=ID.');
-    return { afterId: parseTaskId(match[1]) };
+    return { afterId: parseArtifactNumericId(match[1]) };
 }
 
 export function parseArtifactDownloadOptions(argumentsList) {
     if (argumentsList.length !== 2 || !argumentsList[1].startsWith('--output=')) {
         throw new Error('Uso: mycompany artifact download ID --output=FILE.');
     }
-    const artifactId = parseTaskId(argumentsList[0]);
+    const artifactId = parseArtifactNumericId(argumentsList[0]);
     const outputPath = argumentsList[1].slice('--output='.length);
     if (outputPath === '') throw new Error('Indica la ruta de salida con --output=FILE.');
 
     return { artifactId, outputPath };
+}
+
+export function parseArtifactId(argumentsList) {
+    if (argumentsList.length !== 1) {
+        throw new Error('Uso: mycompany artifact show ID.');
+    }
+
+    return parseArtifactNumericId(argumentsList[0]);
+}
+
+function parseArtifactNumericId(value) {
+    if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        throw new Error('El ID de informe debe ser un entero positivo.');
+    }
+
+    return Number(value);
 }
 
 export function parseAgentBetEvidenceOptions(argumentsList) {
@@ -724,6 +752,8 @@ function printHelp(stdout) {
     stdout.write('    Cambia el estado con offers.manage y registra al agente en el historial.\n');
     stdout.write('  mycompany artifact publish FILE --title=TEXTO [--description=TEXTO] [--source=TEXTO]\n');
     stdout.write('    Publica un archivo .md, .txt o .pdf seleccionado en la carpeta de empresa con artifacts.publish.\n');
+    stdout.write('  mycompany artifact show ID\n');
+    stdout.write('    Muestra los metadatos de un informe permitido con artifacts.read; no descarga su contenido.\n');
     stdout.write('  mycompany artifacts [--after=ID]\n');
     stdout.write('    Lista informes compartidos; artifacts.publish incluye lectura y artifacts.read permite consultarlos.\n');
     stdout.write('  mycompany artifact download ID --output=FILE\n');

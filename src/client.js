@@ -449,6 +449,32 @@ export class AgentClient {
         return response.body;
     }
 
+    async getArtifact(artifactId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(artifactId) || artifactId < 1) {
+            throw new Error('El ID de informe debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/artifacts/${artifactId}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita artifacts.read para consultar informes (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El informe no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || !isArtifactSummary(response.body.artifact)) {
+            throw new Error('MyCompanies devolvió detalles de informe no válidos.');
+        }
+
+        return response.body.artifact;
+    }
+
     async downloadArtifact(artifactId, outputPath, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(artifactId) || artifactId < 1) {
             throw new Error('El ID de informe debe ser un entero positivo.');

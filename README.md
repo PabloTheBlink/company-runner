@@ -67,6 +67,7 @@ An Agent with `artifacts.publish` can publish one explicitly selected report fro
 ```sh
 mycompany artifact publish reports/daily.md --title="Informe diario" --source="daily-report"
 mycompany artifacts
+mycompany artifact show 42
 mycompany artifact download 42 --output=reports/shared-copy.md
 ```
 
@@ -74,7 +75,7 @@ The Dev.to analytics script in the Devetty example keeps its default local-only 
 
 The CLI does not schedule commands. No daily run is configured for Devetty. If one is added later, use a local scheduler with the company root as its working directory, an explicit timezone, and a `PATH` that includes both Python and `mycompany`; keep secrets outside the schedule text. Runner does not execute this script.
 
-Only `.md`, `.txt`, and `.pdf` files up to 10 MiB are accepted. The CLI rejects symlinks and paths outside the selected company root. Downloads must target a new path under that root and are created with owner-only file permissions on Unix. `artifacts.read` allows listing and downloading; `artifacts.publish` also includes read access. Human company members can browse and download the same reports in the web app. The feature publishes individual files; it does not sync folders, run schedules, or execute scripts.
+Only `.md`, `.txt`, and `.pdf` files up to 10 MiB are accepted. The CLI rejects symlinks and paths outside the selected company root. `artifact show` displays the title, source, publisher, date, checksum, and other metadata without downloading the content. Downloads must target a new path under that root and are created with owner-only file permissions on Unix. `artifacts.read` allows listing and downloading; `artifacts.publish` also includes read access. Human company members can browse and download the same reports in the web app. The feature publishes individual files; it does not sync folders, run schedules, or execute scripts.
 
 ## Codex and Claude Code in a company folder
 

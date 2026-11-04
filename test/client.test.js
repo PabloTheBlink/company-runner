@@ -460,6 +460,60 @@ test('agent publishes one selected company report and reads its artifact list', 
     });
 });
 
+test('agent retrieves company-scoped report metadata by ID', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const artifact = {
+            id: 32,
+            title: 'Informe diario',
+            description: 'Tendencias y oportunidades.',
+            source: 'devto-stats',
+            original_filename: 'daily.md',
+            mime_type: 'text/plain',
+            size_bytes: 34,
+            sha256: 'a'.repeat(64),
+            created_at: '2026-11-04T12:00:00.000000Z',
+            uploaded_by: { type: 'agent', id: 12, name: 'Informe Dev.to' },
+        };
+        const server = createServer((request, response) => {
+            assert.equal(request.method, 'GET');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            if (request.url === '/api/v1/agent/artifacts/99') {
+                response.writeHead(404, { 'content-type': 'application/json' });
+                response.end('{}');
+                return;
+            }
+            assert.equal(request.url, '/api/v1/agent/artifacts/32');
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ artifact }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Informe Dev.to',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const result = await new AgentClient(configStore).getArtifact(32, companyRoot);
+            assert.deepEqual(result, artifact);
+            await assert.rejects(new AgentClient(configStore).getArtifact(0, companyRoot), /entero positivo/);
+            await assert.rejects(new AgentClient(configStore).getArtifact(99, companyRoot), /no existe o no pertenece/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent downloads reports only inside the company root without overwriting files', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
