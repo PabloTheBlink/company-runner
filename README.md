@@ -60,6 +60,10 @@ When no responsible identity is assigned, the CLI prints `responsable sin asigna
 
 `mycompany task ID` shows the description, responsible identity, and details for one active task, if its workspace is currently assigned to the selected Runner. The endpoint returns `404` for tasks outside that scope, completed tasks, and unknown IDs. The command prints the text for a person to review; it does not interpret or execute it.
 
+## Codex and Claude Code in a company folder
+
+You can start Codex or Claude Code manually from a company root after reviewing that company's `AGENTS.md` or `CLAUDE.md`. This starts a local coding assistant; it does not start a MyCompanies Agent, authenticate as an agent, apply its capability grants, or authorize access to server data. The current CLI can show task assignments for a Runner, but it does not deliver work to an AI assistant or let it create/assign tasks. Do not treat a profile's title (including CEO) or local instructions as permission. A future connected agent runtime must authenticate the agent, enforce current company/workspace grants on every operation, and record delegation and evidence.
+
 ## Credential storage
 
 Each enrollment is stored as a separate JSON file under the user's private configuration directory:
