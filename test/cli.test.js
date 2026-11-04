@@ -34,15 +34,20 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany work/);
     assert.match(output.value, /mycompany tasks/);
     assert.match(output.value, /mycompany task ID/);
+    assert.match(output.value, /no hay sincronización automática/);
+    assert.match(output.value, /no se crea una carpeta por Workspace/);
+    assert.match(output.value, /no conecta con el servidor/);
+    assert.match(output.value, /No reclama, modifica, marca como terminadas ni ejecuta/);
+    assert.match(output.value, /No revoca el Runner en MyCompanies/);
     assert.doesNotMatch(output.value, /company-runner/);
 });
 
-test('init prepares the selected local workspace without Runner enrollment', async () => {
+test('init prepares the selected company root without Runner enrollment', async () => {
     const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-cli-test-'));
     try {
         const output = { value: '', write(chunk) { this.value += chunk; } };
         assert.equal(await run(['init'], { stdout: output }, directory), 0);
-        assert.match(output.value, /5 archivos creados/);
+        assert.match(output.value, /8 archivos creados/);
         assert.equal((await stat(path.join(directory, 'AGENTS.md'))).isFile(), true);
         assert.equal((await stat(path.join(directory, 'CLAUDE.md'))).isFile(), true);
 

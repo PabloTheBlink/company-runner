@@ -24,21 +24,23 @@ npm install --global github:PabloTheBlink/company-runner
 
 ## Select a company from the current folder
 
-Each local workspace folder is enrolled separately. Run `enroll` from that folder; no path argument is needed:
+Each local company root is enrolled separately. It may contain several logical MyCompanies Workspaces and project repositories. Run `init` and `enroll` from the company root; no path argument is needed:
 
 ```sh
-cd /path/to/company/workspace
+cd /path/to/company
 mycompany init
 mycompany enroll --server=https://YOUR-MYCOMPANIES-HOST
 ```
 
-`mycompany init` is a local-only, repeatable setup command. It creates `AGENTS.md` for Codex, `CLAUDE.md` for Claude Code, and lightweight `tasks/`, `automations/`, and `.mycompanies/` folders. It adds or refreshes only a clearly marked MyCompanies instruction block, preserves instructions outside that block, and leaves existing scaffold files untouched. It refuses symbolic-link targets. It makes no API calls and does not inspect environment files.
+`mycompany init` is a local-only, repeatable setup command. It creates `AGENTS.md` for Codex, `CLAUDE.md` for Claude Code, and the fixed company-root layout: `agents/`, `architecture/`, `tasks/`, `automations/<id>/`, `reports/<id>/`, and `.mycompanies/`. It adds or refreshes only a clearly marked MyCompanies instruction block in those guidance files, preserves text outside the block, and never deletes existing files. It refuses symbolic-link targets and malformed managed blocks before writing anything. It makes no API calls and does not inspect environment files.
 
-The generated guidance keeps personal work, AI-assisted work with optional subagents, and recurring local scripts distinct. It also describes persistent company agents as members with their own identity, flexible role, personality/instructions, skills, and scoped permissions. A coordinating agent may advance business work within those granted permissions; permissions are explicit and are not inferred from an agent's prompt. Subagents remain attributable delegations under a parent agent, not members by default. Scripts may stay where they already live. A future scheduler can refer to a named local capability; MyCompanies must never send arbitrary commands, source code, or local secret values to a Runner. `init` documents this structure but does not configure schedules or run scripts.
+The generated guidance keeps personal work, AI-assisted work with optional subagents, and recurring local scripts distinct. It also describes persistent company agents as members with their own identity, flexible role, personality/instructions, skills, and scoped permissions. A coordinating agent may advance business work within those granted permissions; permissions are explicit and are not inferred from an agent's prompt. Subagents remain attributable delegations under a parent agent, not members by default. A future scheduler can refer to a named local capability; MyCompanies must never send arbitrary commands, source code, or local secret values to a Runner. `init` only prepares local files: it does not contact MyCompanies, configure schedules, or run scripts. There is no background sync. A future explicit `mycompany sync` will materialize server-managed data and report local conflicts; `mycompany update` will update the CLI package separately.
 
-Enter the one-time code from the MyCompanies Runners page when prompted. The prompt hides the code. The current folder is checked locally and is never sent to the server. For local development only, HTTP is allowed for `localhost`, `127.0.0.1`, or `::1` with `--allow-insecure-localhost`; network hosts require HTTPS.
+MyCompanies will own company/workspace data, human and agent identities, permissions, tasks, bets, offers, and schedules. The company root remains the source for repositories, scripts, secrets, and skill contents. A logical Workspace may be linked to a local folder or repo explicitly, but it is never assumed to be one physical directory.
 
-Later, run commands from that workspace or any folder inside it:
+Enter the one-time code from the MyCompanies Runners page when prompted. The prompt hides the code. The current folder is checked locally and is never sent to the server. For local development only, HTTP is allowed for `localhost`, `127.0.0.1`, or `::1` with `--allow-insecure-localhost`; network hosts require HTTPS. Use `mycompany help` for a Spanish description of each command, its local or server effects, and its current limits.
+
+Later, run commands from that company root or any folder inside it:
 
 ```sh
 mycompany heartbeat
@@ -48,7 +50,7 @@ mycompany task 42
 mycompany forget
 ```
 
-With several enrolled folders, the CLI selects the credential whose workspace contains the current directory. If workspace folders are nested, the most specific match wins. The heartbeat confirms the selected company and Runner by name. If no folder matches, the command stops without contacting the server. `forget` removes only the credential selected for the current folder; revoke it from MyCompanies first to invalidate it immediately.
+With several enrolled folders, the CLI selects the credential whose company root contains the current directory. If company roots are nested, the most specific match wins. The heartbeat confirms the selected company and Runner by name. If no folder matches, the command stops without contacting the server. `forget` removes only the credential selected for the current folder; revoke it from MyCompanies first to invalidate it immediately.
 
 `mycompany work` makes one request for an explicitly authorized read-only workspace check. It does not poll continuously, run shell commands, execute scripts, or send local paths. Unknown capabilities are rejected.
 

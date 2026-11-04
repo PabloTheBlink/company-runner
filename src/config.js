@@ -74,7 +74,7 @@ export class ConfigStore {
             throw new Error('No hay una configuración Runner local. Ejecuta primero enroll.');
         }
         if (registrations.length > 1) {
-            throw new Error('Hay varios Runners configurados. Ejecuta mycompany desde la carpeta del workspace correspondiente.');
+            throw new Error('Hay varios Runners configurados. Ejecuta mycompany desde la carpeta raíz de la empresa correspondiente.');
         }
 
         return registrations[0].configuration;
@@ -101,27 +101,27 @@ export class ConfigStore {
         const matchingRegistrations = [];
 
         for (const registration of registrations) {
-            let workspacePath;
+            let companyRootPath;
             try {
-                workspacePath = await realpath(registration.configuration.workspace_path);
+                companyRootPath = await realpath(registration.configuration.workspace_path);
             } catch {
                 continue;
             }
-            if (isWithinDirectory(workspacePath, resolvedDirectory)) {
+            if (isWithinDirectory(companyRootPath, resolvedDirectory)) {
                 matchingRegistrations.push({
                     ...registration,
-                    resolvedWorkspacePath: workspacePath,
+                    resolvedCompanyRootPath: companyRootPath,
                 });
             }
         }
 
         if (matchingRegistrations.length === 0) {
-            throw new Error('No hay un Runner configurado para esta carpeta. Ejecuta enroll desde la carpeta del workspace.');
+            throw new Error('No hay un Runner configurado para esta carpeta. Ejecuta enroll desde la carpeta raíz de la empresa.');
         }
 
-        matchingRegistrations.sort((first, second) => second.resolvedWorkspacePath.length - first.resolvedWorkspacePath.length);
+        matchingRegistrations.sort((first, second) => second.resolvedCompanyRootPath.length - first.resolvedCompanyRootPath.length);
         if (matchingRegistrations.length > 1
-            && matchingRegistrations[0].resolvedWorkspacePath === matchingRegistrations[1].resolvedWorkspacePath) {
+            && matchingRegistrations[0].resolvedCompanyRootPath === matchingRegistrations[1].resolvedCompanyRootPath) {
             throw new Error('Hay varios Runners configurados para esta carpeta. Revísalos antes de continuar.');
         }
 

@@ -42,12 +42,12 @@ export class RunnerClient {
         this.fetch = fetchImplementation;
     }
 
-    async enroll(serverUrl, code, workspacePath = process.cwd(), allowInsecureLocalhost = false) {
+    async enroll(serverUrl, code, companyRootPath = process.cwd(), allowInsecureLocalhost = false) {
         const normalizedServerUrl = normalizeServerUrl(serverUrl, allowInsecureLocalhost);
         if (!ENROLLMENT_CODE_PATTERN.test(code)) {
             throw new Error('El código de alta debe contener 64 caracteres alfanuméricos.');
         }
-        const resolvedWorkspacePath = await validateWorkspacePath(workspacePath);
+        const resolvedCompanyRootPath = await validateCompanyRootPath(companyRootPath);
         const { status, body } = await this.postJson(
             `${normalizedServerUrl}/api/v1/runner/enrollments/exchange`,
             { code },
@@ -63,7 +63,7 @@ export class RunnerClient {
         await this.configStore.saveNew({
             server_url: normalizedServerUrl,
             runner_id: body.runner_id,
-            workspace_path: resolvedWorkspacePath,
+            workspace_path: resolvedCompanyRootPath,
             allow_insecure_localhost: allowInsecureLocalhost,
             api_token: body.api_token,
         });
@@ -75,9 +75,9 @@ export class RunnerClient {
         const configuration = await this.configStore.loadForDirectory(currentDirectory);
         const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
         try {
-            await validateWorkspacePath(configuration.workspace_path);
+            await validateCompanyRootPath(configuration.workspace_path);
         } catch {
-            throw new Error('La ruta local del workspace no está disponible; no se envió el heartbeat.');
+            throw new Error('La carpeta raíz de la empresa no está disponible; no se envió el heartbeat.');
         }
 
         const { status, body } = await this.postJson(
@@ -135,7 +135,7 @@ export class RunnerClient {
 
         let workspaceAccessible = true;
         try {
-            await validateWorkspacePath(configuration.workspace_path);
+            await validateCompanyRootPath(configuration.workspace_path);
         } catch {
             workspaceAccessible = false;
         }
@@ -334,14 +334,14 @@ async function readResponseLimited(response, maximumBytes) {
     return new TextDecoder().decode(combined);
 }
 
-async function validateWorkspacePath(workspacePath) {
+async function validateCompanyRootPath(companyRootPath) {
     try {
-        const resolvedPath = await realpath(workspacePath);
+        const resolvedPath = await realpath(companyRootPath);
         if (!(await stat(resolvedPath)).isDirectory()) throw new Error('Not a directory.');
         await readdir(resolvedPath);
         return resolvedPath;
     } catch {
-        throw new Error('La ruta del workspace debe existir y poder leerse.');
+        throw new Error('La carpeta raíz de la empresa debe existir y poder leerse.');
     }
 }
 

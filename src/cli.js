@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config.js';
 import { RunnerClient } from './client.js';
-import { initializeWorkspace } from './workspace-kit.js';
+import { initializeCompanyRoot } from './company-kit.js';
 
 export async function run(argumentsList, streams = process, currentDirectory = process.cwd()) {
     const [command = 'help', ...argumentsAfterCommand] = argumentsList;
@@ -15,8 +15,8 @@ export async function run(argumentsList, streams = process, currentDirectory = p
 
     if (command === 'init') {
         if (argumentsAfterCommand.length !== 0) throw new Error('init no admite opciones.');
-        const result = await initializeWorkspace(currentDirectory);
-        streams.stdout.write(`Workspace preparado · ${result.created.length} archivos creados · ${result.updated.length} instrucciones actualizadas · ${result.unchanged.length} sin cambios.\n`);
+        const result = await initializeCompanyRoot(currentDirectory);
+        streams.stdout.write(`Carpeta de empresa preparada · ${result.created.length} archivos creados · ${result.updated.length} archivos actualizados · ${result.unchanged.length} sin cambios.\n`);
         return 0;
     }
 
@@ -28,7 +28,7 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         streams.stderr.write('Código de alta (entrada oculta): ');
         const code = await readHiddenCode(streams.stdin, streams.stderr);
         const runnerId = await client.enroll(options.server, code, process.cwd(), options.allowInsecureLocalhost);
-        streams.stdout.write(`Runner #${runnerId} registrado para esta carpeta. La credencial se guardó en configuración local privada.\n`);
+        streams.stdout.write(`Runner #${runnerId} registrado para esta carpeta de empresa. La credencial se guardó en configuración local privada.\n`);
         return 0;
     }
 
@@ -216,15 +216,34 @@ export function readHiddenCode(stdin, stderr) {
 }
 
 function printHelp(stdout) {
-    stdout.write('MyCompany · Runner CLI\n');
-    stdout.write('Ejecuta estos comandos desde la carpeta del workspace correspondiente.\n');
+    stdout.write('MyCompany · CLI para la carpeta raíz local de una empresa\n');
+    stdout.write('Ejecuta los comandos desde la carpeta de la empresa. Puede agrupar varios Workspaces lógicos; no se crea una carpeta por Workspace.\n');
+    stdout.write('\nComandos:\n');
     stdout.write('  mycompany init\n');
+    stdout.write('    Prepara AGENTS.md, CLAUDE.md y las carpetas agents/, architecture/, tasks/, automations/, reports/ y .mycompanies/.\n');
+    stdout.write('    Actualiza solo los bloques que administra MyCompanies; conserva el resto del texto y los archivos existentes. No borra archivos.\n');
+    stdout.write('    Solo trabaja en esta carpeta: no conecta con el servidor, no crea Workspaces remotos y no ejecuta automatizaciones.\n');
     stdout.write('  mycompany enroll --server=URL [--allow-insecure-localhost]\n');
+    stdout.write('    Vincula esta carpeta raíz a un Runner de una empresa usando un código de alta de un solo uso, que se pide oculto en el terminal.\n');
+    stdout.write('    Guarda la credencial en la configuración privada del usuario, asociada a esta ruta; no copia credenciales locales al servidor.\n');
+    stdout.write('    El servidor debe usar HTTPS. La opción de HTTP solo se permite para pruebas en localhost.\n');
     stdout.write('  mycompany heartbeat\n');
+    stdout.write('    Contacta con MyCompanies para confirmar que la credencial sigue activa y muestra empresa, Runner y Workspaces lógicos asignados.\n');
+    stdout.write('    No escanea la carpeta local ni ejecuta trabajo.\n');
     stdout.write('  mycompany work\n');
+    stdout.write('    Consulta si hay una comprobación autorizada de capacidad fija, comprueba acceso de lectura a la carpeta y devuelve solo ese resultado.\n');
+    stdout.write('    No ejecuta código o comandos enviados por el servidor ni transmite la ruta local.\n');
     stdout.write('  mycompany tasks [--after=ID]\n');
+    stdout.write('    Consulta y lista tareas activas de los Workspaces asignados. Usa --after=ID para continuar una lista larga.\n');
+    stdout.write('    Solo las muestra. No reclama, modifica, marca como terminadas ni ejecuta sus descripciones.\n');
     stdout.write('  mycompany task ID\n');
+    stdout.write('    Consulta una tarea por su ID y muestra sus datos como texto para lectura humana. MyCompanies valida el acceso.\n');
+    stdout.write('    La descripción se presenta como texto; no se interpreta como instrucción ejecutable.\n');
     stdout.write('  mycompany forget\n');
+    stdout.write('    Elimina de este usuario la credencial local asociada a la carpeta actual.\n');
+    stdout.write('    No revoca el Runner en MyCompanies: revócalo allí por separado si quieres impedir futuras conexiones.\n');
+    stdout.write('\nAlcance actual: no hay sincronización automática ni comando sync. init solo gestiona archivos locales; heartbeat, work y tasks consultan la API.\n');
+    stdout.write('Los Workspaces son ámbitos lógicos del servidor. La raíz local de empresa puede contener varios proyectos y automatizaciones.\n');
 }
 
 function safeTerminalText(value) {

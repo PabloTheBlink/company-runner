@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import { initializeWorkspace } from '../src/workspace-kit.js';
+import { initializeCompanyRoot } from '../src/company-kit.js';
 
 async function withTemporaryDirectory(runTest) {
     const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-kit-'));
@@ -13,32 +13,38 @@ async function withTemporaryDirectory(runTest) {
     }
 }
 
-test('workspace initialization creates shared assistant instructions and company work folders', async () => {
+test('company initialization creates assistant instructions and the fixed company structure', async () => {
     await withTemporaryDirectory(async (directory) => {
-        const result = await initializeWorkspace(directory);
+        const result = await initializeCompanyRoot(directory);
 
         assert.deepEqual(result.created.sort(), [
             '.mycompanies/README.md',
             'AGENTS.md',
             'CLAUDE.md',
+            'agents/README.md',
+            'architecture/README.md',
             'automations/README.md',
+            'reports/README.md',
             'tasks/README.md',
         ]);
-        assert.match(await readFile(path.join(directory, 'AGENTS.md'), 'utf8'), /MyCompanies workspace instructions/);
-        assert.match(await readFile(path.join(directory, 'CLAUDE.md'), 'utf8'), /MyCompanies workspace instructions/);
-        assert.match(await readFile(path.join(directory, 'automations/README.md'), 'utf8'), /approved recurring scripts/);
+        assert.match(await readFile(path.join(directory, 'AGENTS.md'), 'utf8'), /company-root instructions/);
+        assert.match(await readFile(path.join(directory, 'CLAUDE.md'), 'utf8'), /company-root instructions/);
+        assert.match(await readFile(path.join(directory, 'automations/README.md'), 'utf8'), /Each automation lives/);
+        assert.match(await readFile(path.join(directory, 'reports/README.md'), 'utf8'), /company records/);
+        assert.match(await readFile(path.join(directory, 'agents/README.md'), 'utf8'), /persistent agent/);
+        assert.match(await readFile(path.join(directory, 'architecture/README.md'), 'utf8'), /technical and operational decisions/);
         assert.deepEqual((await readdir(path.join(directory, '.mycompanies'))).sort(), ['README.md']);
     });
 });
 
-test('workspace sync updates only its managed instruction block and preserves user content', async () => {
+test('company initialization updates only its managed instruction block and preserves user content', async () => {
     await withTemporaryDirectory(async (directory) => {
         await writeFile(path.join(directory, 'AGENTS.md'), '# My company\n\nMy own rules.\n');
-        await initializeWorkspace(directory);
+        await initializeCompanyRoot(directory);
         const originalInstructions = await readFile(path.join(directory, 'AGENTS.md'), 'utf8');
         await writeFile(path.join(directory, 'AGENTS.md'), `${originalInstructions.replace('Keep human work, AI-assisted work, and scheduled script automations distinct.', 'Old instructions.') }\n## Local addition\nKeep this.\n`);
 
-        const result = await initializeWorkspace(directory);
+        const result = await initializeCompanyRoot(directory);
         const instructions = await readFile(path.join(directory, 'AGENTS.md'), 'utf8');
 
         assert.equal(result.updated.includes('AGENTS.md'), true);
@@ -49,7 +55,7 @@ test('workspace sync updates only its managed instruction block and preserves us
     });
 });
 
-test('workspace initialization does not replace existing project files or follow symlinks', async () => {
+test('company initialization does not replace existing project files or follow symlinks', async () => {
     await withTemporaryDirectory(async (directory) => {
         const externalPath = path.join(directory, 'external.md');
         const projectPath = path.join(directory, 'project');
@@ -57,12 +63,32 @@ test('workspace initialization does not replace existing project files or follow
         await writeFile(externalPath, 'Do not modify.\n');
         await symlink(externalPath, path.join(projectPath, 'AGENTS.md'));
 
-        await assert.rejects(initializeWorkspace(projectPath), /symbolic link/);
+        await assert.rejects(initializeCompanyRoot(projectPath), /symbolic link/);
         assert.equal(await readFile(externalPath, 'utf8'), 'Do not modify.\n');
     });
 });
 
-test('workspace sync leaves custom scaffold files untouched and rejects incomplete managed markers', async () => {
+test('company initialization preserves custom scaffold content and adds one managed section', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const customGuide = path.join(directory, 'architecture', 'README.md');
+        await mkdir(path.dirname(customGuide), { recursive: true });
+        await writeFile(customGuide, '# My architecture\n\nKeep this local guidance.\n');
+
+        const firstResult = await initializeCompanyRoot(directory);
+        const firstContent = await readFile(customGuide, 'utf8');
+        const secondResult = await initializeCompanyRoot(directory);
+        const secondContent = await readFile(customGuide, 'utf8');
+
+        assert.equal(firstResult.updated.includes('architecture/README.md'), true);
+        assert.match(firstContent, /Keep this local guidance\./);
+        assert.match(firstContent, /BEGIN MYCOMPANIES MANAGED INSTRUCTIONS/);
+        assert.equal(secondResult.unchanged.includes('architecture/README.md'), true);
+        assert.equal(secondContent, firstContent);
+        assert.equal((firstContent.match(/BEGIN MYCOMPANIES MANAGED INSTRUCTIONS/g) ?? []).length, 1);
+    });
+});
+
+test('company initialization rejects incomplete managed markers before changing any files', async () => {
     await withTemporaryDirectory(async (directory) => {
         const customGuide = path.join(directory, '.mycompanies', 'README.md');
         const instructions = path.join(directory, 'AGENTS.md');
@@ -70,7 +96,7 @@ test('workspace sync leaves custom scaffold files untouched and rejects incomple
         await writeFile(customGuide, 'Company-owned guide.\n');
         await writeFile(instructions, '<!-- BEGIN MYCOMPANIES MANAGED INSTRUCTIONS -->\npartial\n');
 
-        await assert.rejects(initializeWorkspace(directory), /incompletas/);
+        await assert.rejects(initializeCompanyRoot(directory), /incompletas/);
         assert.equal(await readFile(customGuide, 'utf8'), 'Company-owned guide.\n');
         assert.equal(await readFile(instructions, 'utf8'), '<!-- BEGIN MYCOMPANIES MANAGED INSTRUCTIONS -->\npartial\n');
         await assert.rejects(access(path.join(directory, 'tasks')));
