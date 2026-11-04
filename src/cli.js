@@ -98,6 +98,18 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (['pause', 'resume'].includes(agentCommand)) {
+            const reportId = parseAgentProfileId(agentArguments);
+            const status = agentCommand === 'pause' ? 'paused' : 'active';
+            const result = await agentClient.updateAgentStatus(reportId, status, currentDirectory);
+            const verb = status === 'paused' ? 'pausado' : 'reactivado';
+            streams.stdout.write(`Agente #${result.agent.id} ${safeTerminalText(result.agent.name)} ${result.changed ? verb : `ya estaba ${status === 'paused' ? 'pausado' : 'activo'}`}.`);
+            if (result.revoked_descendants > 0) {
+                streams.stdout.write(` Se revocaron ${result.revoked_descendants} permisos descendientes.`);
+            }
+            streams.stdout.write('\n');
+            return 0;
+        }
         if (agentCommand === 'tasks') {
             const options = parseAgentTasksOptions(agentArguments);
             const result = await agentClient.listTasks(currentDirectory, options.afterId);
@@ -614,6 +626,16 @@ export function parseAgentPermissionsOptions(argumentsList) {
     return {};
 }
 
+export function parseAgentProfileId(argumentsList) {
+    if (argumentsList.length !== 1) throw new Error('Uso: mycompany agent pause|resume AGENT_ID.');
+    const reportId = Number(argumentsList[0]);
+    if (!Number.isSafeInteger(reportId) || reportId < 1) {
+        throw new Error('El ID de agente debe ser un entero positivo.');
+    }
+
+    return reportId;
+}
+
 export function parseAgentPermissionRevokeOptions(argumentsList) {
     if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent permission revoke AGENT_ID GRANT_ID.');
     return { agentId: parseTaskId(argumentsList[0]), grantId: parseTaskId(argumentsList[1]) };
@@ -961,6 +983,8 @@ function printHelp(stdout) {
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
     stdout.write('  mycompany agent permissions\n');
     stdout.write('    Consulta el catálogo vigente de capacidades y los alcances que admiten.\n');
+    stdout.write('  mycompany agent pause AGENT_ID | resume AGENT_ID\n');
+    stdout.write('    Pausa o reactiva un reporte directo con agents.manage; pausar revoca sus permisos delegados descendientes.\n');
     stdout.write('  mycompany agent tasks [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');

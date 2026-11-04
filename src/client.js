@@ -846,6 +846,46 @@ export class AgentClient {
         return response.body;
     }
 
+    async updateAgentStatus(agentId, status, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(agentId) || agentId < 1) throw new Error('El ID de agente debe ser un entero positivo.');
+        if (!['active', 'paused'].includes(status)) throw new Error('El estado de agente no es válido.');
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.patchJson(
+            `${serverUrl}/api/v1/agent/agents/${agentId}/status`,
+            { status },
+            configuration.api_token,
+        );
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita agents.manage para cambiar el estado de reportes directos (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El destino no es un reporte directo de esta empresa (HTTP 404).');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó el estado solicitado (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        const agent = response.body.agent;
+        if (response.status !== 200
+            || !Number.isSafeInteger(agent?.id)
+            || agent.id !== agentId
+            || typeof agent.name !== 'string'
+            || agent.status !== status
+            || typeof response.body.changed !== 'boolean'
+            || !Number.isSafeInteger(response.body.revoked_descendants)
+            || response.body.revoked_descendants < 0) {
+            throw new Error('MyCompanies devolvió una respuesta de estado de agente no válida.');
+        }
+
+        return response.body;
+    }
+
     async createAgent(agentData, currentDirectory = process.cwd()) {
         if (agentData === null || typeof agentData !== 'object' || Array.isArray(agentData)) {
             throw new Error('Indica un nombre para el nuevo agente.');

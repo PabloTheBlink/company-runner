@@ -676,6 +676,47 @@ test('agent reads the permission catalogue and validates every entry', async () 
     });
 });
 
+test('agent changes a direct report status through the authenticated status endpoint', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.url, '/api/v1/agent/agents/26/status');
+            assert.equal(request.method, 'PATCH');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            assert.deepEqual(JSON.parse(body), { status: 'paused' });
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ agent: { id: 26, name: 'Marketing', status: 'paused' }, changed: true, revoked_descendants: 2 }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            assert.deepEqual(await new AgentClient(configStore).updateAgentStatus(26, 'paused', companyRoot), {
+                agent: { id: 26, name: 'Marketing', status: 'paused' },
+                changed: true,
+                revoked_descendants: 2,
+            });
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent revokes a direct report permission and returns the descendant count', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
