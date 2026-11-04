@@ -97,6 +97,12 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`Tarea #${result.id}: responsable ${responsible}.\n`);
             return 0;
         }
+        if (agentCommand === 'task' && agentArguments[0] === 'edit') {
+            const options = parseAgentTaskEditOptions(agentArguments.slice(1));
+            const task = await agentClient.editTask(options.taskId, options.changes, currentDirectory);
+            streams.stdout.write(`Tarea #${task.id} actualizada · ${safeTerminalText(task.title)}.\n`);
+            return 0;
+        }
         if (agentCommand === 'forget' && agentArguments.length === 0) {
             await agentClient.forget(currentDirectory);
             streams.stdout.write('Credencial Agent local eliminada. Revócala también en MyCompanies para invalidarla en el servidor.\n');
@@ -287,6 +293,34 @@ export function parseAgentAssignmentOptions(argumentsList) {
     return { taskId, assigneeAgentId };
 }
 
+export function parseAgentTaskEditOptions(argumentsList) {
+    if (argumentsList.length < 2) throw new Error('Uso: mycompany agent task edit ID --campo=valor. Indica al menos un campo.');
+    const taskId = parseTaskId(argumentsList[0]);
+    const allowedOptions = new Set(['title', 'description', 'priority', 'due-date']);
+    const changes = {};
+    for (const argument of argumentsList.slice(1)) {
+        const separator = argument.indexOf('=');
+        if (!argument.startsWith('--') || separator < 3) throw new Error('Usa opciones --nombre=valor para editar la tarea.');
+        const name = argument.slice(2, separator);
+        const value = argument.slice(separator + 1);
+        if (!allowedOptions.has(name) || Object.hasOwn(changes, name)) {
+            throw new Error('Opción desconocida o repetida para editar la tarea.');
+        }
+        if (name === 'title' && value === '') throw new Error('El título no puede estar vacío.');
+        if (name === 'priority' && !['low', 'normal', 'high'].includes(value)) throw new Error('Prioridad no válida. Usa low, normal o high.');
+        if (name === 'due-date') {
+            if (value === 'none') changes.due_date = null;
+            else if (/^\d{4}-\d{2}-\d{2}$/.test(value)) changes.due_date = value;
+            else throw new Error('La fecha debe ser AAAA-MM-DD o none.');
+            continue;
+        }
+        if (name === 'description') changes.description = value === '' ? null : value;
+        else changes[name] = value;
+    }
+    if (Object.keys(changes).length === 0) throw new Error('Indica al menos un campo de detalle para editar.');
+    return { taskId, changes };
+}
+
 export function parseTaskId(value) {
     if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
         throw new Error('El ID de tarea debe ser un entero positivo.');
@@ -416,6 +450,8 @@ function printHelp(stdout) {
     stdout.write('    Crea una tarea con tasks.manage, abierta y sin asignar. Reutiliza el mismo UUID al reintentar la misma petición; el servidor aplica el scope y evita duplicados.\n');
     stdout.write('  mycompany agent task assign ID AGENT_ID|none\n');
     stdout.write('    Asigna a un agente activo con tasks.read usando tasks.assign, o deja la tarea sin asignar. MyCompanies registra el actor y valida el scope.\n');
+    stdout.write('  mycompany agent task edit ID [--title=TEXTO] [--description=TEXTO|] [--priority=low|normal|high] [--due-date=AAAA-MM-DD|none]\n');
+    stdout.write('    Edita solo datos descriptivos con tasks.manage y deja el historial en MyCompanies. Usa --description= vacío o --due-date=none para borrarlos.\n');
     stdout.write('  mycompany agent forget\n');
     stdout.write('    Elimina la credencial Agent local de esta carpeta. No la revoca en MyCompanies.\n');
     stdout.write('\nAlcance actual: no hay sincronización automática ni comando sync. init solo gestiona archivos locales; heartbeat, work y tasks consultan la API.\n');

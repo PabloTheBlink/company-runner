@@ -400,6 +400,48 @@ export class AgentClient {
         return response.body.task;
     }
 
+    async editTask(taskId, changes, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+        if (changes === null || typeof changes !== 'object' || Array.isArray(changes)) {
+            throw new Error('La edición solo permite campos de detalle.');
+        }
+        const allowedFields = new Set(['title', 'description', 'priority', 'due_date']);
+        const fields = Object.keys(changes);
+        if (fields.length === 0 || fields.some((field) => !allowedFields.has(field))) {
+            throw new Error('La edición solo permite título, descripción, prioridad y fecha objetivo.');
+        }
+        if (('title' in changes && (typeof changes.title !== 'string' || changes.title.trim() === '' || changes.title.length > 160))
+            || ('description' in changes && changes.description !== null && (typeof changes.description !== 'string' || changes.description.length > 2000))
+            || ('priority' in changes && !['low', 'normal', 'high'].includes(changes.priority))
+            || ('due_date' in changes && changes.due_date !== null && (typeof changes.due_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(changes.due_date)))) {
+            throw new Error('Los campos de detalle de la tarea no son válidos.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.patchJson(`${serverUrl}/api/v1/agent/tasks/${taskId}`, changes, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene el permiso tasks.manage para este ámbito (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La tarea no existe o no está disponible para el ámbito de este agente.');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó la edición. Revisa los campos de detalle (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || response.body.task?.id !== taskId || !isAgentTask(response.body.task, true)) {
+            throw new Error('MyCompanies devolvió una respuesta de edición Agent no válida.');
+        }
+        return response.body.task;
+    }
+
     async assignTask(taskId, assigneeAgentId, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(taskId) || taskId < 1) {
             throw new Error('El ID de tarea debe ser un entero positivo.');

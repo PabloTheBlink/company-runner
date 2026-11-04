@@ -74,10 +74,11 @@ mycompany agent task 42
 mycompany agent task status 42 in_progress
 mycompany agent task create --title="Revisar informe" --idempotency-key=94030b4e-0580-42f6-96d6-cb2b2fe7b457
 mycompany agent task assign 42 13
+mycompany agent task edit 42 --priority=high --due-date=2026-12-01
 mycompany agent forget
 ```
 
-`agent me` fetches the current identity and grants from MyCompanies, so pausing the profile or revoking its credential takes effect on the next request. `agent tasks` lists only active tasks inside the grants currently accepted by the server; `agent task ID` shows one task's details as plain text. `agent task status ID STATUS` requests a status transition under `tasks.manage`; MyCompanies enforces dependency rules and records the Agent actor. `agent task create` also requires `tasks.manage` and an `Idempotency-Key` UUID. Reuse the same UUID when retrying the same request; the server returns the original task and rejects reuse with different fields. `agent task assign ID AGENT_ID|none` uses the separate `tasks.assign` grant; the recipient must be active and have `tasks.read` for the task's company or Workspace. No task command executes scripts or interprets descriptions.
+`agent me` fetches the current identity and grants from MyCompanies, so pausing the profile or revoking its credential takes effect on the next request. `agent tasks` lists only active tasks inside the grants currently accepted by the server; `agent task ID` shows one task's details as plain text. `agent task status ID STATUS` requests a status transition under `tasks.manage`; MyCompanies enforces dependency rules and records the Agent actor. `agent task create` also requires `tasks.manage` and an `Idempotency-Key` UUID. Reuse the same UUID when retrying the same request; the server returns the original task and rejects reuse with different fields. `agent task assign ID AGENT_ID|none` uses the separate `tasks.assign` grant; the recipient must be active and have `tasks.read` for the task's company or Workspace. `agent task edit` allows only title, description, priority, and due date under `tasks.manage`; it cannot change Workspace, status, or assignee. No task command executes scripts or interprets descriptions.
 
 ## Credential storage
 
@@ -93,7 +94,7 @@ On Linux and macOS, the directory is restricted to mode `0700` and files to `060
 
 This release supports one-time enrollment, manual heartbeat, a fixed read-only workspace check, and read-only task listing/detail. It does not poll, access repositories, run scripts, or execute code received from the server. It opens no inbound ports. Runner credentials are revocable from MyCompanies; local workspace paths and tool secrets are not uploaded. HTTP redirects are not followed, response size is bounded, and error messages avoid returning response bodies or credentials.
 
-The Agent CLI currently validates credentials, reads identity/grants, lists scoped active tasks, creates tasks, changes status, and assigns tasks to agents. Task detail editing and launching an AI assistant are unavailable.
+The Agent CLI currently validates credentials, reads identity/grants, lists scoped active tasks, creates/edits tasks, changes status, and assigns tasks to agents. Launching an AI assistant is unavailable.
 
 The server-side contract and future execution boundaries are documented in [MyCompanies' Runner protocol](https://github.com/PabloTheBlink/mycompanies/blob/main/docs/runner-protocol.md).
 
