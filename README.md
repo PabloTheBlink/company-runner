@@ -56,6 +56,8 @@ With several enrolled folders, the CLI selects the credential whose company root
 
 `mycompany tasks` lists up to 100 active tasks from every workspace currently assigned to the selected Runner. It shows each task's title, status, priority, due date, workspace, and responsible person's or agent profile's name. This is the current assignment only; the CLI does not read assignment history. The identity is informational; the Runner does not become that agent or gain its permissions. The list does not download descriptions or execute tasks. Tasks in unassigned workspaces, tasks without a workspace, and completed or cancelled tasks are excluded. If there are more results, continue with the `--after` ID shown by the CLI, for example `mycompany tasks --after=100`.
 
+When no responsible identity is assigned, the CLI prints `responsable sin asignar`.
+
 `mycompany task ID` shows the description, responsible identity, and details for one active task, if its workspace is currently assigned to the selected Runner. The endpoint returns `404` for tasks outside that scope, completed tasks, and unknown IDs. The command prints the text for a person to review; it does not interpret or execute it.
 
 ## Credential storage
