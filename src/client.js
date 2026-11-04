@@ -400,6 +400,41 @@ export class AgentClient {
         return response.body.task;
     }
 
+    async assignTask(taskId, assigneeAgentId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+        if (assigneeAgentId !== null && (!Number.isSafeInteger(assigneeAgentId) || assigneeAgentId < 1)) {
+            throw new Error('El ID del agente responsable debe ser un entero positivo o null.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.patchJson(`${serverUrl}/api/v1/agent/tasks/${taskId}/assignee`, { assignee_agent_id: assigneeAgentId }, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene el permiso tasks.assign para este ámbito (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La tarea o el agente responsable no existen o están fuera del ámbito disponible.');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó la asignación. El agente responsable debe tener tasks.read para este ámbito (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        const assignee = response.body.task?.assignee;
+        if (response.status !== 200
+            || response.body.task?.id !== taskId
+            || (assignee !== null
+                && (assignee?.type !== 'agent' || typeof assignee.name !== 'string'))) {
+            throw new Error('MyCompanies devolvió una respuesta de asignación Agent no válida.');
+        }
+        return response.body.task;
+    }
+
     async updateTaskStatus(taskId, status, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(taskId) || taskId < 1) {
             throw new Error('El ID de tarea debe ser un entero positivo.');

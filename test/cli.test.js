@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentLoginOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssignmentOptions, parseAgentLoginOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -72,6 +72,13 @@ test('agent task creation requires an idempotency UUID and rejects unknown optio
     assert.throws(() => parseAgentTaskCreateOptions(['--title=Revisar', '--idempotency-key=' + idempotencyKey, '--command=rm']), /Opción desconocida/);
 });
 
+test('agent assignment command accepts a positive Agent ID or explicit unassignment', () => {
+    assert.deepEqual(parseAgentAssignmentOptions(['27', '13']), { taskId: 27, assigneeAgentId: 13 });
+    assert.deepEqual(parseAgentAssignmentOptions(['27', 'none']), { taskId: 27, assigneeAgentId: null });
+    assert.throws(() => parseAgentAssignmentOptions(['27', '0']), /entero positivo/);
+    assert.throws(() => parseAgentAssignmentOptions(['27']), /Uso:/);
+});
+
 test('the executable command is named mycompany and help uses that name', async () => {
     const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
     const packageConfiguration = JSON.parse(await readFile(packagePath, 'utf8'));
@@ -90,6 +97,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent task ID/);
     assert.match(output.value, /mycompany agent task status ID ESTADO/);
     assert.match(output.value, /mycompany agent task create/);
+    assert.match(output.value, /mycompany agent task assign ID/);
     assert.match(output.value, /no hay sincronización automática/);
     assert.match(output.value, /no se crea una carpeta por Workspace/);
     assert.match(output.value, /no conecta con el servidor/);

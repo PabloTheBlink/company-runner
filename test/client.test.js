@@ -322,6 +322,46 @@ test('agent task creation sends a stable idempotency key and returns the server 
     });
 });
 
+test('agent assignment sends a target Agent ID through the dedicated scoped endpoint', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'PATCH');
+            assert.equal(request.url, '/api/v1/agent/tasks/27/assignee');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            let requestBody = '';
+            for await (const chunk of request) requestBody += chunk;
+            assert.deepEqual(JSON.parse(requestBody), { assignee_agent_id: 13 });
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ task: { id: 27, assignee: { type: 'agent', name: 'Marketing' } } }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            assert.deepEqual(await new AgentClient(configStore).assignTask(27, 13, companyRoot), {
+                id: 27,
+                assignee: { type: 'agent', name: 'Marketing' },
+            });
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('heartbeat does not follow redirects or expose the token in errors', async () => {
     await withTemporaryDirectory(async (directory) => {
         const workspacePath = path.join(directory, 'workspace');
