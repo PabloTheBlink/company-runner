@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -63,6 +63,15 @@ test('agent offer listing accepts a single positive cursor and detail ID', () =>
     assert.throws(() => parseAgentOffersOptions(['--other']), /Opción desconocida/);
     assert.equal(parseAgentOfferId(['25']), 25);
     assert.throws(() => parseAgentOfferId(['0']), /entero positivo/);
+});
+
+test('agent goal listing accepts a single positive cursor and detail ID', () => {
+    assert.deepEqual(parseAgentGoalsOptions([]), { afterId: null });
+    assert.deepEqual(parseAgentGoalsOptions(['--after=25']), { afterId: 25 });
+    assert.throws(() => parseAgentGoalsOptions(['--after=0']), /entero positivo/);
+    assert.throws(() => parseAgentGoalsOptions(['--other']), /Opción desconocida/);
+    assert.equal(parseAgentGoalId(['25']), 25);
+    assert.throws(() => parseAgentGoalId(['0']), /entero positivo/);
 });
 
 test('agent offer status accepts only supported lifecycle states', () => {
@@ -191,6 +200,8 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent bet status ID ESTADO/);
     assert.match(output.value, /mycompany agent bet convert ID --type=product\|service/);
     assert.match(output.value, /mycompany agent offers/);
+    assert.match(output.value, /mycompany agent goals/);
+    assert.match(output.value, /mycompany agent goal ID/);
     assert.match(output.value, /mycompany agent offer ID/);
     assert.match(output.value, /mycompany agent offer status ID ESTADO/);
     assert.match(output.value, /mycompany artifact publish FILE/);

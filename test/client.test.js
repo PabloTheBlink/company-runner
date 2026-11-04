@@ -337,6 +337,60 @@ test('agent offer list and detail use the company-scoped read API', async () => 
     });
 });
 
+test('agent goal list and detail use the company-scoped read API', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (request.url === '/api/v1/agent/goals?after_id=25') {
+                response.end(JSON.stringify({
+                    goals: [{ id: 26, title: 'Validar Dev.to', status: 'active', target_date: '2026-12-01' }],
+                    has_more: false,
+                    next_after: null,
+                }));
+                return;
+            }
+            assert.equal(request.url, '/api/v1/agent/goals/26');
+            response.end(JSON.stringify({
+                goal: {
+                    id: 26,
+                    title: 'Validar Dev.to',
+                    description: 'Probar publicaciones.',
+                    success_criteria: 'Conseguir contactos cualificados.',
+                    status: 'active',
+                    target_date: '2026-12-01',
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const list = await client.listGoals(companyRoot, 25);
+            assert.equal(list.goals[0].target_date, '2026-12-01');
+            const detail = await client.getGoal(26, companyRoot);
+            assert.equal(detail.success_criteria, 'Conseguir contactos cualificados.');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent offer status update uses the management endpoint and confirms its actor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');

@@ -618,6 +618,63 @@ export class AgentClient {
         return response.body;
     }
 
+    async listGoals(currentDirectory = process.cwd(), afterId = null) {
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de objetivos debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/goals${cursor}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene goals.read o goals.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.goals)
+            || response.body.goals.length > 100
+            || typeof response.body.has_more !== 'boolean'
+            || response.body.goals.some((goal) => !isAgentGoalSummary(goal))
+            || (response.body.has_more
+                ? !Number.isInteger(response.body.next_after)
+                    || response.body.next_after < 1
+                    || response.body.goals.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
+            throw new Error('MyCompanies devolvió una lista de objetivos Agent no válida.');
+        }
+        return response.body;
+    }
+
+    async getGoal(goalId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(goalId) || goalId < 1) {
+            throw new Error('El ID de objetivo debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/goals/${goalId}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene goals.read o goals.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El objetivo no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || !isAgentGoal(response.body.goal)) {
+            throw new Error('MyCompanies devolvió un detalle de objetivo Agent no válido.');
+        }
+        return response.body.goal;
+    }
+
     async getOffer(offerId, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(offerId) || offerId < 1) {
             throw new Error('El ID de oferta debe ser un entero positivo.');
@@ -1270,6 +1327,16 @@ function isAgentOfferSummary(offer) {
         && (offer.bet_id === null || Number.isInteger(offer.bet_id));
 }
 
+function isAgentGoalSummary(goal) {
+    return goal !== null
+        && typeof goal === 'object'
+        && Number.isSafeInteger(goal.id)
+        && goal.id > 0
+        && typeof goal.title === 'string'
+        && ['planned', 'active', 'completed', 'cancelled'].includes(goal.status)
+        && (goal.target_date === null || /^\d{4}-\d{2}-\d{2}$/.test(goal.target_date));
+}
+
 function isArtifactSummary(artifact) {
     return artifact !== null
         && typeof artifact === 'object'
@@ -1299,6 +1366,12 @@ function isPathInside(directoryPath, targetPath) {
 function isAgentOffer(offer) {
     return isAgentOfferSummary(offer)
         && (offer.description === null || typeof offer.description === 'string');
+}
+
+function isAgentGoal(goal) {
+    return isAgentGoalSummary(goal)
+        && (goal.description === null || typeof goal.description === 'string')
+        && typeof goal.success_criteria === 'string';
 }
 
 function isAgentBetSummary(bet) {

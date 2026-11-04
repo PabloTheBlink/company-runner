@@ -143,6 +143,33 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'goals') {
+            const options = parseAgentGoalsOptions(agentArguments);
+            const result = await agentClient.listGoals(currentDirectory, options.afterId);
+            if (result.goals.length === 0) {
+                streams.stdout.write('No hay objetivos registrados para esta empresa.\n');
+                return 0;
+            }
+            streams.stdout.write(`Objetivos de la empresa (${result.goals.length}):\n`);
+            for (const goal of result.goals) {
+                const status = { planned: 'previsto', active: 'activo', completed: 'completado', cancelled: 'cancelado' }[goal.status];
+                const targetDate = goal.target_date === null ? '' : ` · fecha objetivo ${goal.target_date}`;
+                streams.stdout.write(`#${goal.id} [${status}] ${safeTerminalText(goal.title)}${targetDate}\n`);
+            }
+            if (result.has_more) {
+                streams.stdout.write(`Hay más objetivos. Continúa con: mycompany agent goals --after=${result.next_after}\n`);
+            }
+            return 0;
+        }
+        if (agentCommand === 'goal') {
+            const goal = await agentClient.getGoal(parseAgentGoalId(agentArguments), currentDirectory);
+            const status = { planned: 'Previsto', active: 'Activo', completed: 'Completado', cancelled: 'Cancelado' }[goal.status];
+            streams.stdout.write(`#${goal.id} · ${safeTerminalText(goal.title)}\nEstado: ${status}\n`);
+            if (goal.target_date !== null) streams.stdout.write(`Fecha objetivo: ${goal.target_date}\n`);
+            if (goal.description !== null && goal.description !== '') streams.stdout.write(`Descripción: ${safeTerminalText(goal.description)}\n`);
+            streams.stdout.write(`Criterio de éxito: ${safeTerminalText(goal.success_criteria)}\n`);
+            return 0;
+        }
         if (agentCommand === 'offer' && agentArguments[0] === 'status') {
             const options = parseAgentOfferStatusOptions(agentArguments.slice(1));
             const result = await agentClient.updateOfferStatus(options.offerId, options.status, currentDirectory);
@@ -403,6 +430,19 @@ export function parseAgentOffersOptions(argumentsList) {
     const match = /^--after=(.+)$/.exec(argumentsList[0]);
     if (match === null) throw new Error('Opción desconocida para agent offers. Usa --after=ID.');
     return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentGoalsOptions(argumentsList) {
+    if (argumentsList.length === 0) return { afterId: null };
+    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent goals. Usa --after=ID.');
+    const match = /^--after=(.+)$/.exec(argumentsList[0]);
+    if (match === null) throw new Error('Opción desconocida para agent goals. Usa --after=ID.');
+    return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentGoalId(argumentsList) {
+    if (argumentsList.length !== 1) throw new Error('Uso: mycompany agent goal ID.');
+    return parseTaskId(argumentsList[0]);
 }
 
 export function parseAgentOfferId(argumentsList) {
@@ -746,6 +786,10 @@ function printHelp(stdout) {
     stdout.write('    Lista apuestas de la empresa con bets.read o bets.manage. Solo muestra título y estado.\n');
     stdout.write('  mycompany agent offers [--after=ID]\n');
     stdout.write('    Lista ofertas de la empresa con offers.read o offers.manage.\n');
+    stdout.write('  mycompany agent goals [--after=ID]\n');
+    stdout.write('    Lista objetivos de la empresa con goals.read o goals.manage.\n');
+    stdout.write('  mycompany agent goal ID\n');
+    stdout.write('    Muestra la descripción y el criterio de éxito de un objetivo permitido.\n');
     stdout.write('  mycompany agent offer ID\n');
     stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
     stdout.write('  mycompany agent offer status ID ESTADO\n');
