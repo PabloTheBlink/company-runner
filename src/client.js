@@ -2210,10 +2210,32 @@ function isMemoryNode(node) {
         && (node.source_reference === null || typeof node.source_reference === 'string')
         && node.created_by !== null
         && typeof node.created_by === 'object'
-        && ['user', 'agent'].includes(node.created_by.type)
+        && ['user', 'agent', 'legacy'].includes(node.created_by.type)
         && (node.created_by.id === null || Number.isSafeInteger(node.created_by.id))
         && typeof node.created_by.name === 'string'
-        && typeof node.created_at === 'string';
+        && typeof node.created_at === 'string'
+        && (node.relations === undefined || (Array.isArray(node.relations)
+            && node.relations.length <= 10
+            && node.relations.every((relation) => relation !== null
+                && typeof relation === 'object'
+                && typeof relation.relation_type === 'string'
+                && ['suggested', 'accepted'].includes(relation.status)
+                && (relation.confidence === null || (typeof relation.confidence === 'number'
+                    && Number.isFinite(relation.confidence)
+                    && relation.confidence >= 0
+                    && relation.confidence <= 1))
+                && relation.node !== null
+                && typeof relation.node === 'object'
+                && Number.isSafeInteger(relation.node.id)
+                && typeof relation.node.title === 'string'
+                && typeof relation.node.kind === 'string'
+                && relation.node.topic !== null
+                && typeof relation.node.topic === 'object'
+                && Number.isSafeInteger(relation.node.topic.id)
+                && typeof relation.node.topic.name === 'string'
+                && (relation.node.workspace === null || (typeof relation.node.workspace === 'object'
+                    && Number.isSafeInteger(relation.node.workspace.id)
+                    && typeof relation.node.workspace.name === 'string')))));
 }
 
 function isPathInside(directoryPath, targetPath) {

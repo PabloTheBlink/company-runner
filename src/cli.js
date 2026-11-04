@@ -1695,10 +1695,14 @@ function safeTerminalText(value) {
 
 function printMemoryNode(stdout, memory) {
     const workspace = memory.workspace === null ? 'Empresa' : `Workspace ${safeTerminalText(memory.workspace.name)}`;
-    const author = `${memory.created_by.type === 'agent' ? 'Agente' : 'Persona'} ${safeTerminalText(memory.created_by.name)}`;
+    const authorLabel = { agent: 'Agente', user: 'Persona', legacy: 'Histórico' }[memory.created_by.type];
+    const author = `${authorLabel} ${safeTerminalText(memory.created_by.name)}`;
     stdout.write(`#${memory.id} [${memory.kind}] ${safeTerminalText(memory.title)} · tema ${safeTerminalText(memory.topic.name)} · ${workspace} · ${author}\n`);
     stdout.write(`${safeTerminalText(memory.content)}\n`);
     if (memory.source_reference !== null) stdout.write(`Origen (${safeTerminalText(memory.source_type)}): ${safeTerminalText(memory.source_reference)}\n`);
+    for (const relation of memory.relations ?? []) {
+        stdout.write(`  ${safeTerminalText(relation.relation_type)}${relation.status === 'suggested' ? ' (sugerida)' : ''} · ${safeTerminalText(relation.node.title)}${relation.confidence === null ? '' : ` · ${Math.round(relation.confidence * 100)}%`}\n`);
+    }
 }
 
 function taskStatusLabel(status) {
