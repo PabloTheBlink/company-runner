@@ -179,6 +179,28 @@ export class RunnerClient {
         return response.body;
     }
 
+    async getTask(taskId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+
+        const configuration = await this.configStore.loadForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/runner/tasks/${taskId}`, configuration.api_token);
+
+        if (response.status === 401) {
+            throw new Error('La credencial Runner fue rechazada (HTTP 401). Comprueba si fue revocada.');
+        }
+        if (response.status === 404) {
+            throw new Error('La tarea no existe o no está disponible para este Runner.');
+        }
+        if (response.status !== 200 || !isRunnerTask(response.body.task, true)) {
+            throw new Error('MyCompanies devolvió una respuesta de detalle no válida.');
+        }
+
+        return response.body.task;
+    }
+
     async postJson(endpoint, payload, apiToken = '') {
         let response;
         try {
@@ -259,7 +281,7 @@ export class RunnerClient {
     }
 }
 
-function isRunnerTask(task) {
+function isRunnerTask(task, includeDescription = false) {
     return task !== null
         && typeof task === 'object'
         && Number.isInteger(task.id)
@@ -267,6 +289,7 @@ function isRunnerTask(task) {
         && typeof task.title === 'string'
         && ['open', 'in_progress', 'blocked'].includes(task.status)
         && ['low', 'normal', 'high'].includes(task.priority)
+        && (!includeDescription || task.description === null || typeof task.description === 'string')
         && (task.due_date === null || /^\d{4}-\d{2}-\d{2}$/.test(task.due_date))
         && task.workspace !== null
         && typeof task.workspace === 'object'

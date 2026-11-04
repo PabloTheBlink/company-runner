@@ -67,6 +67,22 @@ export async function run(argumentsList, streams = process) {
         return 0;
     }
 
+    if (command === 'task') {
+        if (argumentsAfterCommand.length !== 1) throw new Error('Uso: mycompany task ID.');
+        const taskId = parseTaskId(argumentsAfterCommand[0]);
+        const task = await client.getTask(taskId);
+        const status = { open: 'abierta', in_progress: 'en curso', blocked: 'bloqueada' }[task.status];
+        const priority = { low: 'baja', normal: 'normal', high: 'alta' }[task.priority];
+        const dueDate = task.due_date === null ? 'sin fecha objetivo' : `vence ${task.due_date}`;
+        streams.stdout.write(`#${task.id} · ${safeTerminalText(task.title)}\n`);
+        streams.stdout.write(`Workspace: ${safeTerminalText(task.workspace.name)}\n`);
+        streams.stdout.write(`Estado: ${status} · Prioridad: ${priority} · ${dueDate}\n`);
+        if (task.description !== null && task.description !== '') {
+            streams.stdout.write(`\n${safeTerminalText(task.description)}\n`);
+        }
+        return 0;
+    }
+
     if (command === 'forget') {
         if (argumentsAfterCommand.length !== 0) throw new Error('forget no admite opciones.');
         await configStore.forget(process.cwd());
@@ -102,6 +118,18 @@ export function parseEnrollOptions(argumentsList) {
     }
 
     return options;
+}
+
+export function parseTaskId(value) {
+    if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
+        throw new Error('El ID de tarea debe ser un entero positivo.');
+    }
+    const taskId = Number(value);
+    if (!Number.isSafeInteger(taskId)) {
+        throw new Error('El ID de tarea debe ser un entero positivo.');
+    }
+
+    return taskId;
 }
 
 export function readHiddenCode(stdin, stderr) {
@@ -173,6 +201,7 @@ function printHelp(stdout) {
     stdout.write('  mycompany heartbeat\n');
     stdout.write('  mycompany work\n');
     stdout.write('  mycompany tasks\n');
+    stdout.write('  mycompany task ID\n');
     stdout.write('  mycompany forget\n');
 }
 

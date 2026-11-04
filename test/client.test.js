@@ -327,3 +327,74 @@ test('task listing rejects unexpected or malformed task response data', async ()
         }
     });
 });
+
+test('task detail fetches only the requested task through the authenticated runner API', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const token = 'T'.repeat(80);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const server = createServer((request, response) => {
+            assert.equal(request.method, 'GET');
+            assert.equal(request.url, '/api/v1/runner/tasks/42');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                task: {
+                    id: 42,
+                    title: 'Revisar informe',
+                    description: 'Comparar con las fuentes originales.',
+                    status: 'in_progress',
+                    priority: 'high',
+                    due_date: null,
+                    workspace: { id: 9, name: 'Operaciones' },
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const task = await new RunnerClient(configStore).getTask(42, workspacePath);
+            assert.equal(task.description, 'Comparar con las fuentes originales.');
+            assert.equal(task.workspace.name, 'Operaciones');
+            assert.equal(JSON.stringify(task).includes(workspacePath), false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('task detail rejects malformed response data', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const server = createServer((_request, response) => {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ task: { id: 42, title: 'Tarea sin estado' } }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: 'T'.repeat(80),
+        });
+
+        try {
+            await assert.rejects(new RunnerClient(configStore).getTask(42, workspacePath), /respuesta de detalle no válida/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});

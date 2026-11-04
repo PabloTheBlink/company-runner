@@ -39,6 +39,7 @@ Later, run commands from that workspace or any folder inside it:
 mycompany heartbeat
 mycompany work
 mycompany tasks
+mycompany task 42
 mycompany forget
 ```
 
@@ -47,6 +48,8 @@ With several enrolled folders, the CLI selects the credential whose workspace co
 `mycompany work` makes one request for an explicitly authorized read-only workspace check. It does not poll continuously, run shell commands, execute scripts, or send local paths. Unknown capabilities are rejected.
 
 `mycompany tasks` lists up to 100 active tasks from every workspace currently assigned to the selected Runner. It shows each task's title, status, priority, due date, and workspace; it does not download descriptions or execute tasks. Tasks in unassigned workspaces, tasks without a workspace, and completed or cancelled tasks are excluded. If the server reports more than 100 active tasks, the CLI says so.
+
+`mycompany task ID` shows the description and details for one active task, if its workspace is currently assigned to the selected Runner. The endpoint returns `404` for tasks outside that scope, completed tasks, and unknown IDs. The command prints the text for a person to review; it does not interpret or execute it.
 
 ## Credential storage
 
@@ -60,7 +63,7 @@ On Linux and macOS, the directory is restricted to mode `0700` and files to `060
 
 ## Scope and security
 
-This release supports one-time enrollment, manual heartbeat, a fixed read-only workspace check, and read-only task listing. It does not poll, access repositories, run scripts, or execute code received from the server. It opens no inbound ports. Runner credentials are revocable from MyCompanies; local workspace paths and tool secrets are not uploaded. HTTP redirects are not followed, response size is bounded, and error messages avoid returning response bodies or credentials.
+This release supports one-time enrollment, manual heartbeat, a fixed read-only workspace check, and read-only task listing/detail. It does not poll, access repositories, run scripts, or execute code received from the server. It opens no inbound ports. Runner credentials are revocable from MyCompanies; local workspace paths and tool secrets are not uploaded. HTTP redirects are not followed, response size is bounded, and error messages avoid returning response bodies or credentials.
 
 The server-side contract and future execution boundaries are documented in [MyCompanies' Runner protocol](https://github.com/PabloTheBlink/mycompanies/blob/main/docs/runner-protocol.md).
 

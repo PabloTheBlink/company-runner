@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseEnrollOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseEnrollOptions, parseTaskId, readHiddenCode, run } from '../src/cli.js';
 
 test('enrollment options use the current directory without a path option', () => {
     assert.deepEqual(parseEnrollOptions([
@@ -32,7 +32,15 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany heartbeat/);
     assert.match(output.value, /mycompany work/);
     assert.match(output.value, /mycompany tasks/);
+    assert.match(output.value, /mycompany task ID/);
     assert.doesNotMatch(output.value, /company-runner/);
+});
+
+test('task detail accepts only a positive numeric task ID', () => {
+    assert.equal(parseTaskId('42'), 42);
+    assert.throws(() => parseTaskId('0'), /entero positivo/);
+    assert.throws(() => parseTaskId('4abc'), /entero positivo/);
+    assert.throws(() => parseTaskId('9007199254740992'), /entero positivo/);
 });
 
 test('enrollment code input disables terminal echo and restores the prior mode', async () => {
