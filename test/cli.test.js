@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -356,6 +358,58 @@ test('agent identities shows only local profiles and never prints tokens', async
         assert.doesNotMatch(stdout.value, /api_token|111111|121212/);
         assert.equal(stderr.value, '');
     } finally {
+        if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previousConfigHome;
+        if (previousAgentId === undefined) delete process.env.MYCOMPANY_AGENT_ID;
+        else process.env.MYCOMPANY_AGENT_ID = previousAgentId;
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test('credential listing shows actor type and names without printing token material', async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-credential-audit-test-'));
+    const companyRoot = path.join(directory, 'company');
+    const configHome = path.join(directory, 'config');
+    const previousConfigHome = process.env.XDG_CONFIG_HOME;
+    const previousAgentId = process.env.MYCOMPANY_AGENT_ID;
+    await mkdir(companyRoot, { recursive: true });
+    const token = 'A'.repeat(80);
+    const server = createServer((request, response) => {
+        assert.equal(request.url, '/api/v1/agent/agents/12/credentials');
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+            agent: { id: 12, name: 'Marketing', status: 'active' },
+            credentials: [{
+                id: 44, name: 'Runtime', issued_by_type: 'agent', issued_by_name: 'CEO Vera',
+                created_at: '2026-11-04T10:00:00.000Z', revoked_by_type: 'user', revoked_by_name: 'Pablo',
+                revoked_at: '2026-11-04T11:00:00.000Z',
+            }],
+            has_more: false, next_after: null,
+        }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const serverUrl = `http://127.0.0.1:${server.address().port}`;
+    const configStore = new ConfigStore(path.join(configHome, 'mycompanies', 'runner.json'));
+    await configStore.saveAgent({
+        server_url: serverUrl, agent_id: 1, agent_name: 'CEO', company_id: 4,
+        company_name: 'Devetty', company_root_path: companyRoot, allow_insecure_localhost: true, api_token: token,
+    });
+    process.env.XDG_CONFIG_HOME = configHome;
+    delete process.env.MYCOMPANY_AGENT_ID;
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+    const stderr = { value: '', write(chunk) { this.value += chunk; } };
+
+    try {
+        assert.equal(await run(['agent', 'credential', 'list', '12'], { stdout, stderr }, companyRoot), 0);
+        assert.match(stdout.value, /Emitida por agente: CEO Vera/);
+        assert.match(stdout.value, /revocada .* · revocada por persona: Pablo/);
+        assert.doesNotMatch(stdout.value, /api_token|token_hash|A{80}/);
+        assert.equal(stderr.value, '');
+    } finally {
+        server.close();
+        await once(server, 'close');
         if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
         else process.env.XDG_CONFIG_HOME = previousConfigHome;
         if (previousAgentId === undefined) delete process.env.MYCOMPANY_AGENT_ID;

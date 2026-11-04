@@ -149,8 +149,8 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             for (const credential of result.credentials) {
                 const state = credential.revoked_at === null
                     ? 'activa'
-                    : `revocada ${safeTerminalText(credential.revoked_at)} por ${safeTerminalText(credential.revoked_by_name ?? 'desconocido')}`;
-                streams.stdout.write(`#${credential.id} [${state}] ${safeTerminalText(credential.name)} · emitida por ${safeTerminalText(credential.issued_by_name ?? 'desconocido')} · ${safeTerminalText(credential.created_at)}\n`);
+                    : `revocada ${safeTerminalText(credential.revoked_at)} · revocada por ${formatCredentialActor(credential.revoked_by_type, credential.revoked_by_name)}`;
+                streams.stdout.write(`#${credential.id} [${state}] ${safeTerminalText(credential.name)} · Emitida por ${formatCredentialActor(credential.issued_by_type, credential.issued_by_name)} · ${safeTerminalText(credential.created_at)}\n`);
             }
             if (result.has_more) streams.stdout.write(`Hay más credenciales. Continúa con: mycompany agent credential list ${options.agentId} --after=${result.next_after}\n`);
             return 0;
@@ -1160,6 +1160,11 @@ function printHelp(stdout) {
 
 function safeTerminalText(value) {
     return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
+}
+
+function formatCredentialActor(type, name) {
+    const actorType = type === 'agent' ? 'agente' : type === 'user' ? 'persona' : 'origen anterior';
+    return `${actorType}: ${safeTerminalText(name ?? 'desconocido')}`;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
