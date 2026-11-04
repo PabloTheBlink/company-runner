@@ -179,6 +179,8 @@ The selected Agent must have the server permission `artifacts.publish`, and the 
 
 Runner and Agent credentials are kept as separate JSON files under the user's private configuration directory. Agent credentials are selected by their associated company root and cannot be used as Runner credentials. The paths below show Runner storage; Agent files use the sibling `agents/` directory:
 
+The web UI displays a newly issued Agent credential only once and only on the Agents page for the company that issued it. After copying it, enroll it from that company's local folder; the CLI keeps its private credential associated with that folder.
+
 - Linux: `$XDG_CONFIG_HOME/mycompanies/runners/`, or `~/.config/mycompanies/runners/`
 - macOS: `$XDG_CONFIG_HOME/mycompanies/runners/`, or `~/Library/Application Support/mycompanies/runners/`
 - Windows: `%APPDATA%\mycompanies\runners\`
