@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
@@ -292,6 +292,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany heartbeat/);
     assert.match(output.value, /mycompany init/);
     assert.match(output.value, /mycompany work/);
+    assert.match(output.value, /mycompany capabilities/);
     assert.match(output.value, /mycompany tasks/);
     assert.match(output.value, /mycompany tasks \[--status=open\|in_progress\|blocked\] \[--after=ID\]/);
     assert.match(output.value, /mycompany task ID/);
@@ -334,6 +335,37 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /No reclama, modifica, marca como terminadas ni ejecuta/);
     assert.match(output.value, /No revoca el Runner en MyCompanies/);
     assert.doesNotMatch(output.value, /company-runner/);
+});
+
+test('capabilities reports locally installed adapters without contacting MyCompanies', async () => {
+    const companyRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-capabilities-test-'));
+    const nestedDirectory = path.join(companyRoot, 'automations', 'devto');
+    const scriptPath = path.join(nestedDirectory, 'devto_stats.py');
+    await mkdir(nestedDirectory, { recursive: true });
+    await writeFile(scriptPath, '# fixture; never executed\n');
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+    const requestedDirectories = [];
+    const configStore = {
+        async loadForDirectory(directory) {
+            requestedDirectories.push(directory);
+            return { workspace_path: companyRoot };
+        },
+    };
+
+    try {
+        assert.equal(await run(['capabilities'], { stdout: output, stderr: output }, companyRoot, configStore), 0);
+        assert.match(output.value, /devto\.stats\.totals@1\.0\.0/);
+        assert.match(output.value, /solo lectura/);
+        assert.match(output.value, /No conecta con MyCompanies ni Dev\.to, no lee \.env/);
+        assert.deepEqual(requestedDirectories, [companyRoot]);
+
+        await rm(scriptPath);
+        output.value = '';
+        assert.equal(await run(['capabilities'], { stdout: output, stderr: output }, companyRoot, configStore), 0);
+        assert.match(output.value, /No hay adaptadores locales disponibles/);
+    } finally {
+        await rm(companyRoot, { recursive: true, force: true });
+    }
 });
 
 test('agent identities shows only local profiles and never prints tokens', async () => {

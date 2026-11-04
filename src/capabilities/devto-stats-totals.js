@@ -13,23 +13,22 @@ export const DEVTO_STATS_TOTALS_CAPABILITY = Object.freeze({
     maxOutputBytes: 1_048_576,
 });
 
+export async function listLocalCapabilities(companyRoot) {
+    if (await resolveCompanyRoot(companyRoot) === null) {
+        return [];
+    }
+
+    return [{
+        name: DEVTO_STATS_TOTALS_CAPABILITY.name,
+        version: DEVTO_STATS_TOTALS_CAPABILITY.version,
+        access: 'read only',
+        requirement: 'Python 3',
+    }];
+}
+
 export async function runDevtoStatsTotals({ companyRoot, execFileImplementation = execFile } = {}) {
-    let resolvedCompanyRoot;
-    let resolvedScriptPath;
-
-    try {
-        resolvedCompanyRoot = await realpath(companyRoot);
-        resolvedScriptPath = await realpath(path.join(resolvedCompanyRoot, SCRIPT_PATH));
-        const scriptStats = await stat(resolvedScriptPath);
-        const relativeScriptPath = path.relative(resolvedCompanyRoot, resolvedScriptPath);
-
-        if (!scriptStats.isFile()
-            || relativeScriptPath === ''
-            || relativeScriptPath.startsWith(`..${path.sep}`)
-            || path.isAbsolute(relativeScriptPath)) {
-            throw new Error('Invalid capability path.');
-        }
-    } catch {
+    const resolvedCompanyRoot = await resolveCompanyRoot(companyRoot);
+    if (resolvedCompanyRoot === null) {
         throw new Error('La capacidad Dev.to no está instalada en esta carpeta de empresa.');
     }
 
@@ -46,6 +45,29 @@ export async function runDevtoStatsTotals({ companyRoot, execFileImplementation 
     }
 
     return validateAndFilterResponse(response);
+}
+
+async function resolveCompanyRoot(companyRoot) {
+    let resolvedCompanyRoot;
+    let resolvedScriptPath;
+
+    try {
+        resolvedCompanyRoot = await realpath(companyRoot);
+        resolvedScriptPath = await realpath(path.join(resolvedCompanyRoot, SCRIPT_PATH));
+        const scriptStats = await stat(resolvedScriptPath);
+        const relativeScriptPath = path.relative(resolvedCompanyRoot, resolvedScriptPath);
+
+        if (!scriptStats.isFile()
+            || relativeScriptPath === ''
+            || relativeScriptPath.startsWith(`..${path.sep}`)
+            || path.isAbsolute(relativeScriptPath)) {
+            return null;
+        }
+    } catch {
+        return null;
+    }
+
+    return resolvedCompanyRoot;
 }
 
 function executeFixedScript(execFileImplementation, companyRoot) {

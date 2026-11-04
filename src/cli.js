@@ -4,9 +4,10 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config.js';
 import { AgentClient, formatAssignee, RunnerClient } from './client.js';
+import { listLocalCapabilities } from './capabilities/devto-stats-totals.js';
 import { initializeCompanyRoot } from './company-kit.js';
 
-export async function run(argumentsList, streams = process, currentDirectory = process.cwd()) {
+export async function run(argumentsList, streams = process, currentDirectory = process.cwd(), configStore = new ConfigStore()) {
     const [command = 'help', ...argumentsAfterCommand] = argumentsList;
     if (['help', '--help', '-h'].includes(command)) {
         printHelp(streams.stdout);
@@ -17,6 +18,22 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         if (argumentsAfterCommand.length !== 0) throw new Error('init no admite opciones.');
         const result = await initializeCompanyRoot(currentDirectory);
         streams.stdout.write(`Carpeta de empresa preparada · ${result.created.length} archivos creados · ${result.updated.length} archivos actualizados · ${result.unchanged.length} sin cambios.\n`);
+        return 0;
+    }
+
+    if (command === 'capabilities') {
+        if (argumentsAfterCommand.length !== 0) throw new Error('capabilities no admite opciones.');
+        const configuration = await configStore.loadForDirectory(currentDirectory);
+        const capabilities = await listLocalCapabilities(configuration.workspace_path);
+        if (capabilities.length === 0) {
+            streams.stdout.write('No hay adaptadores locales disponibles en esta carpeta de empresa.\n');
+        } else {
+            streams.stdout.write('Capacidades locales disponibles:\n');
+            for (const capability of capabilities) {
+                streams.stdout.write(`${capability.name}@${capability.version} · solo lectura · requiere ${capability.requirement}\n`);
+            }
+        }
+        streams.stdout.write('No conecta con MyCompanies ni Dev.to, no lee .env, no muestra credenciales y no ejecuta el script.\n');
         return 0;
     }
 
@@ -68,7 +85,6 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         throw new Error('Uso: mycompany artifact show ID | mycompany artifact publish FILE --title=TEXTO | mycompany artifact download ID --output=FILE.');
     }
 
-    const configStore = new ConfigStore();
     const client = new RunnerClient(configStore);
 
     if (command === 'agent') {
@@ -1101,6 +1117,7 @@ function printHelp(stdout) {
     stdout.write('    Contacta con MyCompanies para confirmar que la credencial sigue activa y muestra empresa, Runner y Workspaces lógicos asignados.\n');
     stdout.write('    No escanea la carpeta local ni ejecuta trabajo.\n');
     stdout.write('  mycompany work\n');
+    stdout.write('  mycompany capabilities\n');
     stdout.write('    Consulta si hay una comprobación autorizada de capacidad fija, comprueba acceso de lectura a la carpeta y devuelve solo ese resultado.\n');
     stdout.write('    No ejecuta código o comandos enviados por el servidor ni transmite la ruta local.\n');
     stdout.write('  mycompany tasks [--status=open|in_progress|blocked] [--after=ID]\n');
