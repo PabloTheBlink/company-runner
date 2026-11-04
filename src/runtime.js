@@ -38,7 +38,7 @@ export function createAgentRuntimePlan(provider, installedProviders, identity, t
 }
 
 export function isLocalFileOperationAllowed(agentId, grants, operation, relativePath) {
-    const normalizedPath = normalizeLocalPolicyPath(relativePath);
+    const normalizedPath = normalizeLocalAgentPath(relativePath);
     if (!Number.isSafeInteger(agentId) || agentId < 1
         || !['read', 'write'].includes(operation)
         || normalizedPath === null
@@ -47,12 +47,12 @@ export function isLocalFileOperationAllowed(agentId, grants, operation, relative
     }
 
     return grants.some((grant) => grant?.agentId === agentId
-        && normalizeLocalPolicyPath(grant.path) === normalizedPath
+        && normalizeLocalAgentPath(grant.path) === normalizedPath
         && Array.isArray(grant.operations)
         && grant.operations.includes(operation));
 }
 
-function normalizeLocalPolicyPath(value) {
+export function normalizeLocalAgentPath(value) {
     if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) return null;
 
     const portablePath = value.replaceAll('\\', '/');
