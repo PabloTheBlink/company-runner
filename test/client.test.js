@@ -601,6 +601,79 @@ test('agent creates a direct report without assigning permissions or a credentia
     });
 });
 
+test('agent delegates a held grant to a direct report within the API scope', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'POST');
+            assert.equal(request.url, '/api/v1/agent/agents/26/permissions');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            assert.deepEqual(JSON.parse(body), { permission: 'tasks.read', workspace_id: 8 });
+            response.writeHead(201, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ grant: { id: 91, permission: 'tasks.read', scope: 'workspace:8', granted_by: 'Vera' } }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const result = await new AgentClient(configStore).grantAgentPermission(26, 'tasks.read', 8, companyRoot);
+            assert.equal(result.id, 91);
+            assert.equal(result.scope, 'workspace:8');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('agent revokes a direct report permission and returns the descendant count', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.method, 'DELETE');
+            assert.equal(request.url, '/api/v1/agent/agents/26/permissions/91');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ revoked_count: 3 }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            assert.deepEqual(await new AgentClient(configStore).revokeAgentPermission(26, 91, companyRoot), { revoked_count: 3 });
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent offer status update uses the management endpoint and confirms its actor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');

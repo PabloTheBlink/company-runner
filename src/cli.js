@@ -221,6 +221,22 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write('Concede solo los permisos necesarios desde un Agent autorizado; este perfil aún no tiene credencial para iniciar sesión.\n');
             return 0;
         }
+        if (agentCommand === 'permission') {
+            const [permissionAction, ...permissionArguments] = agentArguments;
+            if (permissionAction === 'grant') {
+                const options = parseAgentPermissionGrantOptions(permissionArguments);
+                const grant = await agentClient.grantAgentPermission(options.agentId, options.permission, options.workspaceId, currentDirectory);
+                streams.stdout.write(`Permiso ${safeTerminalText(grant.permission)} concedido al agente #${options.agentId} (${safeTerminalText(grant.scope)}) por ${safeTerminalText(grant.granted_by)}. Grant #${grant.id}.\n`);
+                return 0;
+            }
+            if (permissionAction === 'revoke') {
+                const options = parseAgentPermissionRevokeOptions(permissionArguments);
+                const result = await agentClient.revokeAgentPermission(options.agentId, options.grantId, currentDirectory);
+                streams.stdout.write(`Grant #${options.grantId} revocado del agente #${options.agentId}; ${result.revoked_count} grants revocados contando descendientes.\n`);
+                return 0;
+            }
+            throw new Error('Uso: mycompany agent permission grant AGENT_ID PERMISO [--workspace-id=ID] | revoke AGENT_ID GRANT_ID.');
+        }
         if (agentCommand === 'workspace') {
             const workspace = await agentClient.getWorkspace(parseAgentWorkspaceId(agentArguments), currentDirectory);
             streams.stdout.write(`#${workspace.id} · ${safeTerminalText(workspace.name)}\nUUID: ${workspace.uuid}\nEstado: ${safeTerminalText(workspace.status)}\n`);
@@ -565,6 +581,27 @@ export function parseAgentCreateOptions(argumentsList) {
     if (values.role === '') values.role = null;
     if (values.instructions === '') values.instructions = null;
     return values;
+}
+
+export function parseAgentPermissionGrantOptions(argumentsList) {
+    if (argumentsList.length < 2 || argumentsList.length > 3) {
+        throw new Error('Uso: mycompany agent permission grant AGENT_ID PERMISO [--workspace-id=ID].');
+    }
+    const agentId = parseTaskId(argumentsList[0]);
+    const permission = argumentsList[1];
+    if (!/^[a-z]+(?:\.[a-z]+)+$/.test(permission)) throw new Error('El permiso solicitado no es válido.');
+    let workspaceId = null;
+    if (argumentsList.length === 3) {
+        const match = /^--workspace-id=(.+)$/.exec(argumentsList[2]);
+        if (match === null) throw new Error('Opción desconocida. Usa --workspace-id=ID.');
+        workspaceId = parseTaskId(match[1]);
+    }
+    return { agentId, permission, workspaceId };
+}
+
+export function parseAgentPermissionRevokeOptions(argumentsList) {
+    if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent permission revoke AGENT_ID GRANT_ID.');
+    return { agentId: parseTaskId(argumentsList[0]), grantId: parseTaskId(argumentsList[1]) };
 }
 
 export function parseAgentWorkspaceId(argumentsList) {
@@ -929,6 +966,10 @@ function printHelp(stdout) {
     stdout.write('    Lista reportes directos y grants vigentes con agents.permissions.manage.\n');
     stdout.write('  mycompany agent create --name=NOMBRE [--role=ROL] [--instructions=TEXTO]\n');
     stdout.write('    Crea un perfil subordinado activo y sin permisos; requiere agents.manage.\n');
+    stdout.write('  mycompany agent permission grant AGENT_ID PERMISO [--workspace-id=ID]\n');
+    stdout.write('    Delega a un reporte directo solo permisos propios, con alcance igual o más estrecho.\n');
+    stdout.write('  mycompany agent permission revoke AGENT_ID GRANT_ID\n');
+    stdout.write('    Revoca el grant seleccionado y sus grants descendientes.\n');
     stdout.write('  mycompany agent offer ID\n');
     stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
     stdout.write('  mycompany agent offer status ID ESTADO\n');

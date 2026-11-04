@@ -872,6 +872,78 @@ export class AgentClient {
         return agent;
     }
 
+    async grantAgentPermission(agentId, permission, workspaceId = null, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(agentId) || agentId < 1) throw new Error('El ID de agente debe ser un entero positivo.');
+        if (typeof permission !== 'string' || !/^[a-z]+(?:\.[a-z]+)+$/.test(permission)) {
+            throw new Error('El permiso solicitado no es válido.');
+        }
+        if (workspaceId !== null && (!Number.isSafeInteger(workspaceId) || workspaceId < 1)) {
+            throw new Error('El ID de Workspace debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(
+            `${serverUrl}/api/v1/agent/agents/${agentId}/permissions`,
+            { permission, workspace_id: workspaceId },
+            configuration.api_token,
+        );
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no puede delegar este permiso o no lo posee para el alcance solicitado (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El destino no es un reporte directo activo o el Workspace no existe en esta empresa (HTTP 404).');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó la concesión. Comprueba el permiso, el Workspace y si ya está concedido (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        const grant = response.body.grant;
+        if (response.status !== 201
+            || !Number.isSafeInteger(grant?.id)
+            || grant.id < 1
+            || grant.permission !== permission
+            || typeof grant.scope !== 'string'
+            || typeof grant.granted_by !== 'string') {
+            throw new Error('MyCompanies devolvió una respuesta de concesión Agent no válida.');
+        }
+        return grant;
+    }
+
+    async revokeAgentPermission(agentId, grantId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(agentId) || agentId < 1) throw new Error('El ID de agente debe ser un entero positivo.');
+        if (!Number.isSafeInteger(grantId) || grantId < 1) throw new Error('El ID de permiso debe ser un entero positivo.');
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.deleteJson(
+            `${serverUrl}/api/v1/agent/agents/${agentId}/permissions/${grantId}`,
+            configuration.api_token,
+        );
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no puede revocar este permiso o no posee el permiso de origen (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El permiso no existe o no pertenece a un reporte directo de esta empresa (HTTP 404).');
+        }
+        if (response.status === 409) {
+            throw new Error('MyCompanies no reconoce el permiso que se intenta revocar (HTTP 409).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || !Number.isSafeInteger(response.body.revoked_count) || response.body.revoked_count < 1) {
+            throw new Error('MyCompanies devolvió una respuesta de revocación Agent no válida.');
+        }
+        return response.body;
+    }
+
     async getOffer(offerId, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(offerId) || offerId < 1) {
             throw new Error('El ID de oferta debe ser un entero positivo.');
@@ -1388,6 +1460,37 @@ export class AgentClient {
             throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
         }
     }
+    async deleteJson(endpoint, apiToken) {
+        let response;
+        try {
+            response = await this.fetch(endpoint, {
+                method: 'DELETE',
+                headers: { Accept: 'application/json', Authorization: `Bearer ${apiToken}` },
+                redirect: 'manual',
+                signal: AbortSignal.timeout(10_000),
+            });
+        } catch {
+            throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
+        }
+        if (![200, 401, 403, 404, 409, 429].includes(response.status)) {
+            throw new Error(`MyCompanies devolvió un error HTTP ${response.status}.`);
+        }
+        if (response.status !== 200) return { status: response.status, body: {} };
+        let responseText;
+        try {
+            responseText = await readResponseLimited(response, MAX_RESPONSE_BYTES);
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta demasiado grande o no válida.');
+        }
+        try {
+            const body = JSON.parse(responseText);
+            if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid response shape.');
+            return { status: response.status, body };
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
+        }
+    }
+
     async requestIdentity(serverUrl, apiToken) {
         const response = await this.getJson(`${serverUrl}/api/v1/agent/me`, apiToken);
         if (response.status === 401) {
