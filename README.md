@@ -52,6 +52,8 @@ On the web server, sensitive bet actions also recheck current company membership
 
 Human web task changes are also company-scoped: task writes recheck owner/admin access in a transaction, assignments must target a company member or an active Agent with task access, and dependencies must stay within the company and cannot form a cycle. Runner task listing/detail remain read-only and are separately limited to the Runner's current Workspace assignments.
 
+Agent hierarchy and permissions are a separate server API from Runner credentials. Agent management writes revalidate the active Agent credential and the permission required for the operation in a company-locked transaction. Delegation requires an active source grant at an equal or broader scope, and revoking it also revokes delegated descendants. Issued credential secrets are shown once; history endpoints expose metadata only and disable caching.
+
 ## Real Codex trial status
 
 On 2026-11-04, Codex CLI 0.157.0 was launched directly with `codex exec` in Devetty's new `reports/apify-eu-ted/` folder and wrote a market audit for MyCompanies task #7. The task and its public Store research were selected and prepared manually. Marta's local `instructions.md` was used only as prompt context: the marketing agent Marta was **not** executed, authenticated, or recorded as the author. Later, the Runner's Codex adapter was verified with a real isolated `CODEX_RUNTIME_OK` run and a canary check that confirmed a file outside staging was blocked. This validates Codex invocation and sandbox behavior, but no company task has yet run through the Agent identity. The task, credentials and grants still need owner/admin setup for Marta.
