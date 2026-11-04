@@ -70,6 +70,8 @@ mycompany artifacts
 mycompany artifact download 42 --output=reports/shared-copy.md
 ```
 
+The Dev.to analytics script in the Devetty example keeps its default local-only behavior. To generate and share its report in one explicit action, run `python3 automations/devto/devto_stats.py report --publish` from the company root. The script first saves the report locally, then invokes the CLI with that exact report path. It requires an active Agent CLI credential with `artifacts.publish`.
+
 Only `.md`, `.txt`, and `.pdf` files up to 10 MiB are accepted. The CLI rejects symlinks and paths outside the selected company root. Downloads must target a new path under that root and are created with owner-only file permissions on Unix. `artifacts.read` allows listing and downloading; `artifacts.publish` also includes read access. Human company members can browse and download the same reports in the web app. The feature publishes individual files; it does not sync folders, run schedules, or execute scripts.
 
 ## Codex and Claude Code in a company folder
