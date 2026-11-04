@@ -37,10 +37,13 @@ Later, run commands from that workspace or any folder inside it:
 
 ```sh
 mycompany heartbeat
+mycompany work
 mycompany forget
 ```
 
 With several enrolled folders, the CLI selects the credential whose workspace contains the current directory. If workspace folders are nested, the most specific match wins. The heartbeat confirms the selected company and Runner by name. If no folder matches, the command stops without contacting the server. `forget` removes only the credential selected for the current folder; revoke it from MyCompanies first to invalidate it immediately.
+
+`mycompany work` makes one request for an explicitly authorized read-only workspace check. It does not poll continuously, run shell commands, execute scripts, or send local paths. Unknown capabilities are rejected.
 
 ## Credential storage
 

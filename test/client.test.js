@@ -133,3 +133,126 @@ test('heartbeat does not follow redirects or expose the token in errors', async 
         }
     });
 });
+
+test('workspace check claims only the fixed capability and returns no local path or command', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const token = 'T'.repeat(80);
+        const leaseToken = 'L'.repeat(80);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        let resultPayload;
+        const server = createServer(async (request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            if (request.url === '/api/v1/runner/workspace-checks/claim') {
+                let requestBody = '';
+                for await (const chunk of request) requestBody += chunk;
+                assert.equal(requestBody, '{}');
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    id: 23,
+                    capability: 'workspace.check',
+                    lease_token: leaseToken,
+                    workspace: { id: 9, name: 'Devetty y microapps' },
+                }));
+                return;
+            }
+            if (request.url === '/api/v1/runner/workspace-checks/23/result') {
+                let requestBody = '';
+                for await (const chunk of request) requestBody += chunk;
+                resultPayload = JSON.parse(requestBody);
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ status: 'completed', workspace_accessible: true }));
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new RunnerClient(configStore);
+            const result = await client.workOnce(workspacePath);
+
+            assert.deepEqual(result, { workspace_name: 'Devetty y microapps', workspace_accessible: true });
+            assert.deepEqual(resultPayload, { lease_token: leaseToken, workspace_accessible: true });
+            assert.equal(JSON.stringify(resultPayload).includes(workspacePath), false);
+            assert.equal(JSON.stringify(resultPayload).includes('command'), false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('workspace check reports no work without sending a result', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        let resultCalls = 0;
+        const server = createServer((_request, response) => {
+            response.writeHead(204);
+            response.end();
+            if (_request.url.endsWith('/result')) resultCalls++;
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: 'T'.repeat(80),
+        });
+
+        try {
+            assert.equal(await new RunnerClient(configStore).workOnce(workspacePath), null);
+            assert.equal(resultCalls, 0);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('workspace check rejects unknown capabilities without running or reporting them', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        let resultCalls = 0;
+        const server = createServer((_request, response) => {
+            if (_request.url.endsWith('/claim')) {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ id: 1, capability: 'shell.execute', lease_token: 'L'.repeat(80) }));
+            } else {
+                resultCalls++;
+                response.writeHead(200);
+                response.end('{}');
+            }
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: 'T'.repeat(80),
+        });
+
+        try {
+            await assert.rejects(new RunnerClient(configStore).workOnce(workspacePath), /capacidad no permitida/);
+            assert.equal(resultCalls, 0);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});

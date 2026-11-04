@@ -105,6 +105,61 @@ export class RunnerClient {
         return body;
     }
 
+    async workOnce(currentDirectory = process.cwd()) {
+        const configuration = await this.configStore.loadForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const claim = await this.postJson(
+            `${serverUrl}/api/v1/runner/workspace-checks/claim`,
+            {},
+            configuration.api_token,
+        );
+
+        if (claim.status === 204) {
+            return null;
+        }
+        if (claim.status === 401) {
+            throw new Error('La credencial Runner fue rechazada (HTTP 401). Comprueba si fue revocada.');
+        }
+        if (claim.status !== 200
+            || !Number.isInteger(claim.body.id)
+            || claim.body.id < 1
+            || claim.body.capability !== 'workspace.check'
+            || typeof claim.body.lease_token !== 'string'
+            || !API_TOKEN_PATTERN.test(claim.body.lease_token)
+            || claim.body.workspace === null
+            || typeof claim.body.workspace !== 'object'
+            || !Number.isInteger(claim.body.workspace.id)
+            || typeof claim.body.workspace.name !== 'string') {
+            throw new Error('MyCompanies devolvió un trabajo no válido o una capacidad no permitida.');
+        }
+
+        let workspaceAccessible = true;
+        try {
+            await validateWorkspacePath(configuration.workspace_path);
+        } catch {
+            workspaceAccessible = false;
+        }
+
+        const result = await this.postJson(
+            `${serverUrl}/api/v1/runner/workspace-checks/${claim.body.id}/result`,
+            {
+                lease_token: claim.body.lease_token,
+                workspace_accessible: workspaceAccessible,
+            },
+            configuration.api_token,
+        );
+        if (result.status !== 200
+            || result.body.status !== 'completed'
+            || result.body.workspace_accessible !== workspaceAccessible) {
+            throw new Error('MyCompanies no aceptó el resultado de la comprobación del workspace.');
+        }
+
+        return {
+            workspace_name: claim.body.workspace.name,
+            workspace_accessible: workspaceAccessible,
+        };
+    }
+
     async postJson(endpoint, payload, apiToken = '') {
         let response;
         try {
@@ -123,6 +178,9 @@ export class RunnerClient {
             throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
         }
 
+        if (response.status === 204) {
+            return { status: response.status, body: {} };
+        }
         if (response.status === 401 || response.status === 404 || response.status === 429 || response.status >= 300) {
             return { status: response.status, body: {} };
         }

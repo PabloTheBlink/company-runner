@@ -33,6 +33,19 @@ export async function run(argumentsList, streams = process) {
         return 0;
     }
 
+    if (command === 'work') {
+        if (argumentsAfterCommand.length !== 0) throw new Error('work no admite opciones.');
+        const result = await client.workOnce();
+        if (result === null) {
+            streams.stdout.write('No hay comprobaciones autorizadas para este workspace.\n');
+        } else {
+            const status = result.workspace_accessible ? 'accesible' : 'no accesible';
+            const workspaceName = result.workspace_name.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
+            streams.stdout.write(`Comprobación completada · ${workspaceName}: ${status}.\n`);
+        }
+        return 0;
+    }
+
     if (command === 'forget') {
         if (argumentsAfterCommand.length !== 0) throw new Error('forget no admite opciones.');
         await configStore.forget(process.cwd());
@@ -137,6 +150,7 @@ function printHelp(stdout) {
     stdout.write('Ejecuta estos comandos desde la carpeta del workspace correspondiente.\n');
     stdout.write('  mycompany enroll --server=URL [--allow-insecure-localhost]\n');
     stdout.write('  mycompany heartbeat\n');
+    stdout.write('  mycompany work\n');
     stdout.write('  mycompany forget\n');
 }
 

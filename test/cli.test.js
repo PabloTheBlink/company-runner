@@ -30,6 +30,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.deepEqual(packageConfiguration.bin, { mycompany: './src/cli.js' });
     assert.equal(await run(['help'], { stdout: output }), 0);
     assert.match(output.value, /mycompany heartbeat/);
+    assert.match(output.value, /mycompany work/);
     assert.doesNotMatch(output.value, /company-runner/);
 });
 
