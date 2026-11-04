@@ -42,14 +42,12 @@ export class RunnerClient {
         this.fetch = fetchImplementation;
     }
 
-    async enroll(serverUrl, code, workspacePath, allowInsecureLocalhost = false) {
+    async enroll(serverUrl, code, workspacePath = process.cwd(), allowInsecureLocalhost = false) {
         const normalizedServerUrl = normalizeServerUrl(serverUrl, allowInsecureLocalhost);
         if (!ENROLLMENT_CODE_PATTERN.test(code)) {
             throw new Error('El código de alta debe contener 64 caracteres alfanuméricos.');
         }
         const resolvedWorkspacePath = await validateWorkspacePath(workspacePath);
-        await this.configStore.assertAvailable();
-
         const { status, body } = await this.postJson(
             `${normalizedServerUrl}/api/v1/runner/enrollments/exchange`,
             { code },
@@ -73,8 +71,8 @@ export class RunnerClient {
         return body.runner_id;
     }
 
-    async heartbeat() {
-        const configuration = await this.configStore.load();
+    async heartbeat(currentDirectory = process.cwd()) {
+        const configuration = await this.configStore.loadForDirectory(currentDirectory);
         const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
         try {
             await validateWorkspacePath(configuration.workspace_path);
@@ -92,6 +90,8 @@ export class RunnerClient {
         }
         if (status !== 200
             || body.runner_id !== configuration.runner_id
+            || typeof body.runner_name !== 'string'
+            || typeof body.company_name !== 'string'
             || body.status !== 'online'
             || typeof body.last_seen_at !== 'string'
             || !Array.isArray(body.workspaces)

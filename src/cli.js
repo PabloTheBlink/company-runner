@@ -19,8 +19,8 @@ export async function run(argumentsList, streams = process) {
         const options = parseEnrollOptions(argumentsAfterCommand);
         streams.stderr.write('Código de alta (entrada oculta): ');
         const code = await readHiddenCode(streams.stdin, streams.stderr);
-        const runnerId = await client.enroll(options.server, code, options.workspacePath, options.allowInsecureLocalhost);
-        streams.stdout.write(`Runner #${runnerId} registrado. La credencial se guardó en configuración local privada.\n`);
+        const runnerId = await client.enroll(options.server, code, process.cwd(), options.allowInsecureLocalhost);
+        streams.stdout.write(`Runner #${runnerId} registrado para esta carpeta. La credencial se guardó en configuración local privada.\n`);
         return 0;
     }
 
@@ -29,18 +29,18 @@ export async function run(argumentsList, streams = process) {
         const result = await client.heartbeat();
         const workspaceNames = result.workspaces.map((workspace) => workspace.name);
         const workspaceSummary = workspaceNames.length === 0 ? 'sin workspaces asignados' : `workspaces: ${workspaceNames.join(', ')}`;
-        streams.stdout.write(`Runner #${result.runner_id}: online · ${workspaceSummary} · ${result.last_seen_at}\n`);
+        streams.stdout.write(`${result.company_name} · ${result.runner_name} (#${result.runner_id}): online · ${workspaceSummary} · ${result.last_seen_at}\n`);
         return 0;
     }
 
     if (command === 'forget') {
         if (argumentsAfterCommand.length !== 0) throw new Error('forget no admite opciones.');
-        await configStore.forget();
-        streams.stdout.write('Configuración local eliminada. Revoca antes el Runner desde MyCompanies si aún está activo.\n');
+        await configStore.forget(process.cwd());
+        streams.stdout.write('Configuración de esta carpeta eliminada. Revoca antes el Runner desde MyCompanies si aún está activo.\n');
         return 0;
     }
 
-    throw new Error('Comando desconocido. Usa company-runner help.');
+    throw new Error('Comando desconocido. Usa mycompany help.');
 }
 
 export function parseEnrollOptions(argumentsList) {
@@ -57,15 +57,14 @@ export function parseEnrollOptions(argumentsList) {
         }
         const name = argument.slice(2, separator);
         const value = argument.slice(separator + 1);
-        if (!value || !['server', 'workspace-path'].includes(name)) {
-            throw new Error('Opción desconocida o vacía. Usa company-runner help.');
+        if (!value || name !== 'server') {
+            throw new Error('Opción desconocida o vacía. Usa mycompany help.');
         }
-        if (name === 'server') options.server = value;
-        if (name === 'workspace-path') options.workspacePath = value;
+        options.server = value;
     }
 
-    if (!options.server || !options.workspacePath) {
-        throw new Error('Faltan opciones. Usa enroll --server=URL --workspace-path=RUTA.');
+    if (!options.server) {
+        throw new Error('Falta el servidor. Usa enroll --server=URL.');
     }
 
     return options;
@@ -134,10 +133,11 @@ export function readHiddenCode(stdin, stderr) {
 }
 
 function printHelp(stdout) {
-    stdout.write('Company Runner\n');
-    stdout.write('  company-runner enroll --server=URL --workspace-path=RUTA [--allow-insecure-localhost]\n');
-    stdout.write('  company-runner heartbeat\n');
-    stdout.write('  company-runner forget\n');
+    stdout.write('MyCompany · Runner CLI\n');
+    stdout.write('Ejecuta estos comandos desde la carpeta del workspace correspondiente.\n');
+    stdout.write('  mycompany enroll --server=URL [--allow-insecure-localhost]\n');
+    stdout.write('  mycompany heartbeat\n');
+    stdout.write('  mycompany forget\n');
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

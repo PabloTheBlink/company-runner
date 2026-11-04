@@ -29,10 +29,10 @@ test('configuration is private, readable by the owner and removable', async () =
         await store.saveNew(configuration);
 
         assert.deepEqual(await store.load(), configuration);
-        assert.equal((await stat(store.path)).mode & 0o777, 0o600);
+        assert.equal((await stat(path.join(store.registrationsDirectory, 'runner-7.json'))).mode & 0o777, 0o600);
         assert.equal((await stat(path.dirname(store.path))).mode & 0o777, 0o700);
         await assert.rejects(store.saveNew(configuration), /Ya existe una configuración Runner/);
-        await store.forget();
+        await store.forget(directory);
         await assert.rejects(store.load(), /No hay una configuración Runner/);
     });
 });
@@ -46,5 +46,75 @@ test('configuration load rejects group-readable files and symbolic links', async
         const linkedPath = path.join(directory, 'linked.json');
         await symlink(store.path, linkedPath);
         await assert.rejects(new ConfigStore(linkedPath).load(), /enlace simbólico/);
+    });
+});
+
+test('several runner credentials are selected by the workspace containing the current directory', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const firstWorkspace = path.join(directory, 'companies', 'first');
+        const secondWorkspace = path.join(directory, 'companies', 'second');
+        await mkdir(path.join(firstWorkspace, 'repo'), { recursive: true });
+        await mkdir(secondWorkspace, { recursive: true });
+        const firstConfiguration = {
+            server_url: 'https://first.example',
+            runner_id: 7,
+            workspace_path: firstWorkspace,
+            allow_insecure_localhost: false,
+            api_token: 'first-token',
+        };
+        const secondConfiguration = {
+            server_url: 'https://second.example',
+            runner_id: 8,
+            workspace_path: secondWorkspace,
+            allow_insecure_localhost: false,
+            api_token: 'second-token',
+        };
+
+        await store.saveNew(firstConfiguration);
+        await store.saveNew(secondConfiguration);
+
+        assert.deepEqual(await store.loadForDirectory(path.join(firstWorkspace, 'repo')), firstConfiguration);
+        assert.deepEqual(await store.loadForDirectory(secondWorkspace), secondConfiguration);
+        await store.forget(secondWorkspace);
+        await assert.rejects(store.loadForDirectory(secondWorkspace), /No hay un Runner configurado para esta carpeta/);
+        assert.deepEqual(await store.loadForDirectory(firstWorkspace), firstConfiguration);
+    });
+});
+
+test('the most specific workspace wins when registered workspaces are nested', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const companyDirectory = path.join(directory, 'company');
+        const projectDirectory = path.join(companyDirectory, 'project');
+        await mkdir(projectDirectory, { recursive: true });
+        const createConfiguration = (runnerId, workspacePath) => ({
+            server_url: 'https://mycompanies.example',
+            runner_id: runnerId,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: false,
+            api_token: `${runnerId}-token`,
+        });
+
+        await store.saveNew(createConfiguration(7, companyDirectory));
+        await store.saveNew(createConfiguration(8, projectDirectory));
+
+        assert.equal((await store.loadForDirectory(projectDirectory)).runner_id, 8);
+    });
+});
+
+test('legacy single-runner configuration remains selectable by its workspace directory', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const configuration = {
+            server_url: 'https://mycompanies.example',
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: false,
+            api_token: 'legacy-token',
+        };
+        await mkdir(path.dirname(store.path), { recursive: true });
+        await writeFile(store.path, JSON.stringify(configuration), { mode: 0o600 });
+
+        assert.deepEqual(await store.loadForDirectory(workspacePath), configuration);
     });
 });

@@ -1,20 +1,36 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import test from 'node:test';
-import { parseEnrollOptions, readHiddenCode } from '../src/cli.js';
+import { parseEnrollOptions, readHiddenCode, run } from '../src/cli.js';
 
-test('enrollment options require server and workspace and reject unknown arguments', () => {
+test('enrollment options use the current directory without a path option', () => {
     assert.deepEqual(parseEnrollOptions([
         '--server=https://mycompanies.example',
-        '--workspace-path=/work/company',
         '--allow-insecure-localhost',
     ]), {
         server: 'https://mycompanies.example',
-        workspacePath: '/work/company',
         allowInsecureLocalhost: true,
     });
-    assert.throws(() => parseEnrollOptions(['--server=https://mycompanies.example']), /Faltan opciones/);
-    assert.throws(() => parseEnrollOptions(['--server=https://mycompanies.example', '--workspace-path=/work', '--token=secret']), /Opción desconocida/);
+    assert.deepEqual(parseEnrollOptions(['--server=https://mycompanies.example']), {
+        server: 'https://mycompanies.example',
+        allowInsecureLocalhost: false,
+    });
+    assert.throws(() => parseEnrollOptions(['--server=https://mycompanies.example', '--workspace-path=/work']), /Opción desconocida/);
+    assert.throws(() => parseEnrollOptions(['--server=https://mycompanies.example', '--token=secret']), /Opción desconocida/);
+});
+
+test('the executable command is named mycompany and help uses that name', async () => {
+    const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
+    const packageConfiguration = JSON.parse(await readFile(packagePath, 'utf8'));
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+
+    assert.deepEqual(packageConfiguration.bin, { mycompany: './src/cli.js' });
+    assert.equal(await run(['help'], { stdout: output }), 0);
+    assert.match(output.value, /mycompany heartbeat/);
+    assert.doesNotMatch(output.value, /company-runner/);
 });
 
 test('enrollment code input disables terminal echo and restores the prior mode', async () => {

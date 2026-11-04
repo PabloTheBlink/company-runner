@@ -12,7 +12,7 @@
   },
   "type": "module",
   "bin": {
-    "company-runner": "./src/cli.js"
+    "mycompany": "./src/cli.js"
   },
   "engines": {
     "node": ">=20"

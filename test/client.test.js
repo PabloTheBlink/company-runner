@@ -52,6 +52,8 @@ test('enrollment and heartbeat use the API token and never send the local worksp
                 response.writeHead(200, { 'content-type': 'application/json' });
                 response.end(JSON.stringify({
                     runner_id: 7,
+                    runner_name: 'Runner devetty',
+                    company_name: 'Devetty',
                     status: 'online',
                     last_seen_at: '2026-11-04T10:00:00Z',
                     workspaces: [{ id: 9, name: 'Contenido y Dev.to' }],
@@ -67,10 +69,11 @@ test('enrollment and heartbeat use the API token and never send the local worksp
         try {
             const client = new RunnerClient(configStore);
             const runnerId = await client.enroll(serverUrl, 'C'.repeat(64), workspacePath, true);
-            const heartbeat = await client.heartbeat();
+            const heartbeat = await client.heartbeat(workspacePath);
 
             assert.equal(runnerId, 7);
             assert.equal(heartbeat.runner_id, 7);
+            assert.equal(heartbeat.company_name, 'Devetty');
             assert.deepEqual(heartbeat.workspaces, [{ id: 9, name: 'Contenido y Dev.to' }]);
             assert.equal(enrollmentCalls, 1);
             assert.equal(heartbeatCalls, 1);
@@ -117,7 +120,7 @@ test('heartbeat does not follow redirects or expose the token in errors', async 
                 api_token: token,
             });
             const client = new RunnerClient(configStore);
-            await assert.rejects(client.heartbeat(), (error) => {
+            await assert.rejects(client.heartbeat(workspacePath), (error) => {
                 assert.match(error.message, /respuesta de heartbeat no válida/);
                 assert.equal(error.message.includes(token), false);
                 return true;
