@@ -732,6 +732,63 @@ export class AgentClient {
         return response.body.asset;
     }
 
+    async listWorkspaces(currentDirectory = process.cwd(), afterId = null) {
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de Workspaces debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/workspaces${cursor}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene workspaces.read o workspaces.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.workspaces)
+            || response.body.workspaces.length > 100
+            || typeof response.body.has_more !== 'boolean'
+            || response.body.workspaces.some((workspace) => !isAgentWorkspaceSummary(workspace))
+            || (response.body.has_more
+                ? !Number.isInteger(response.body.next_after)
+                    || response.body.next_after < 1
+                    || response.body.workspaces.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
+            throw new Error('MyCompanies devolvió una lista de Workspaces Agent no válida.');
+        }
+        return response.body;
+    }
+
+    async getWorkspace(workspaceId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(workspaceId) || workspaceId < 1) {
+            throw new Error('El ID de Workspace debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/workspaces/${workspaceId}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene workspaces.read o workspaces.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El Workspace no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || !isAgentWorkspace(response.body.workspace)) {
+            throw new Error('MyCompanies devolvió un detalle de Workspace Agent no válido.');
+        }
+        return response.body.workspace;
+    }
+
     async getOffer(offerId, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(offerId) || offerId < 1) {
             throw new Error('El ID de oferta debe ser un entero positivo.');
@@ -1404,6 +1461,17 @@ function isAgentAssetSummary(asset) {
         && (asset.url === null || typeof asset.url === 'string');
 }
 
+function isAgentWorkspaceSummary(workspace) {
+    return workspace !== null
+        && typeof workspace === 'object'
+        && Number.isSafeInteger(workspace.id)
+        && workspace.id > 0
+        && typeof workspace.uuid === 'string'
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(workspace.uuid)
+        && typeof workspace.name === 'string'
+        && typeof workspace.status === 'string';
+}
+
 function isArtifactSummary(artifact) {
     return artifact !== null
         && typeof artifact === 'object'
@@ -1444,6 +1512,11 @@ function isAgentGoal(goal) {
 function isAgentAsset(asset) {
     return isAgentAssetSummary(asset)
         && (asset.description === null || typeof asset.description === 'string');
+}
+
+function isAgentWorkspace(workspace) {
+    return isAgentWorkspaceSummary(workspace)
+        && (workspace.description === null || typeof workspace.description === 'string');
 }
 
 function isAgentBetSummary(bet) {

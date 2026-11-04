@@ -178,6 +178,29 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'workspaces') {
+            const options = parseAgentWorkspacesOptions(agentArguments);
+            const result = await agentClient.listWorkspaces(currentDirectory, options.afterId);
+            if (result.workspaces.length === 0) {
+                streams.stdout.write('No hay Workspaces registrados para esta empresa.\n');
+                return 0;
+            }
+            streams.stdout.write(`Workspaces de la empresa (${result.workspaces.length}):\n`);
+            for (const workspace of result.workspaces) {
+                streams.stdout.write(`#${workspace.id} ${safeTerminalText(workspace.name)} [${safeTerminalText(workspace.status)}] · ${workspace.uuid}\n`);
+            }
+            if (result.has_more) {
+                streams.stdout.write(`Hay más Workspaces. Continúa con: mycompany agent workspaces --after=${result.next_after}\n`);
+            }
+            return 0;
+        }
+        if (agentCommand === 'workspace') {
+            const workspace = await agentClient.getWorkspace(parseAgentWorkspaceId(agentArguments), currentDirectory);
+            streams.stdout.write(`#${workspace.id} · ${safeTerminalText(workspace.name)}\nUUID: ${workspace.uuid}\nEstado: ${safeTerminalText(workspace.status)}\n`);
+            if (workspace.description !== null && workspace.description !== '') streams.stdout.write(`Descripción: ${safeTerminalText(workspace.description)}\n`);
+            streams.stdout.write('Este Workspace es una identidad lógica; MyCompanies no expone una ruta local de archivos.\n');
+            return 0;
+        }
         if (agentCommand === 'asset') {
             const asset = await agentClient.getAsset(parseAgentAssetId(agentArguments), currentDirectory);
             streams.stdout.write(`#${asset.id} · ${safeTerminalText(asset.name)}\nTipo: ${safeTerminalText(asset.type)}\n`);
@@ -479,6 +502,19 @@ export function parseAgentAssetsOptions(argumentsList) {
 
 export function parseAgentAssetId(argumentsList) {
     if (argumentsList.length !== 1) throw new Error('Uso: mycompany agent asset ID.');
+    return parseTaskId(argumentsList[0]);
+}
+
+export function parseAgentWorkspacesOptions(argumentsList) {
+    if (argumentsList.length === 0) return { afterId: null };
+    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent workspaces. Usa --after=ID.');
+    const match = /^--after=(.+)$/.exec(argumentsList[0]);
+    if (match === null) throw new Error('Opción desconocida para agent workspaces. Usa --after=ID.');
+    return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentWorkspaceId(argumentsList) {
+    if (argumentsList.length !== 1) throw new Error('Uso: mycompany agent workspace ID.');
     return parseTaskId(argumentsList[0]);
 }
 
@@ -831,6 +867,10 @@ function printHelp(stdout) {
     stdout.write('    Lista activos de la empresa con assets.read o assets.manage.\n');
     stdout.write('  mycompany agent asset ID\n');
     stdout.write('    Muestra los datos de un activo permitido.\n');
+    stdout.write('  mycompany agent workspaces [--after=ID]\n');
+    stdout.write('    Lista Workspaces de la empresa con workspaces.read o workspaces.manage.\n');
+    stdout.write('  mycompany agent workspace ID\n');
+    stdout.write('    Muestra un Workspace lógico sin exponer una ruta local.\n');
     stdout.write('  mycompany agent offer ID\n');
     stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
     stdout.write('  mycompany agent offer status ID ESTADO\n');
