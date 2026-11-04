@@ -214,6 +214,13 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'create') {
+            const agentData = parseAgentCreateOptions(agentArguments);
+            const agent = await agentClient.createAgent(agentData, currentDirectory);
+            streams.stdout.write(`Agente #${agent.id} creado · ${safeTerminalText(agent.name)}${agent.role === null ? '' : ` (${safeTerminalText(agent.role)})`} · activo y sin permisos.\n`);
+            streams.stdout.write('Concede solo los permisos necesarios desde un Agent autorizado; este perfil aún no tiene credencial para iniciar sesión.\n');
+            return 0;
+        }
         if (agentCommand === 'workspace') {
             const workspace = await agentClient.getWorkspace(parseAgentWorkspaceId(agentArguments), currentDirectory);
             streams.stdout.write(`#${workspace.id} · ${safeTerminalText(workspace.name)}\nUUID: ${workspace.uuid}\nEstado: ${safeTerminalText(workspace.status)}\n`);
@@ -539,6 +546,25 @@ export function parseAgentAgentsOptions(argumentsList) {
     const match = /^--after=(.+)$/.exec(argumentsList[0]);
     if (match === null) throw new Error('Opción desconocida para agent agents. Usa --after=ID.');
     return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentCreateOptions(argumentsList) {
+    const fields = new Set(['name', 'role', 'instructions']);
+    const values = {};
+    for (const argument of argumentsList) {
+        const separator = argument.indexOf('=');
+        if (!argument.startsWith('--') || separator < 3) throw new Error('Usa opciones con formato --nombre=valor.');
+        const field = argument.slice(2, separator);
+        const value = argument.slice(separator + 1);
+        if (!fields.has(field) || Object.hasOwn(values, field)) throw new Error('Opción desconocida o repetida para agent create.');
+        values[field] = value;
+    }
+    if (typeof values.name !== 'string' || values.name.trim() === '') {
+        throw new Error('Falta el nombre del agente. Usa --name=NOMBRE.');
+    }
+    if (values.role === '') values.role = null;
+    if (values.instructions === '') values.instructions = null;
+    return values;
 }
 
 export function parseAgentWorkspaceId(argumentsList) {
@@ -901,6 +927,8 @@ function printHelp(stdout) {
     stdout.write('    Muestra un Workspace lógico sin exponer una ruta local.\n');
     stdout.write('  mycompany agent agents [--after=ID]\n');
     stdout.write('    Lista reportes directos y grants vigentes con agents.permissions.manage.\n');
+    stdout.write('  mycompany agent create --name=NOMBRE [--role=ROL] [--instructions=TEXTO]\n');
+    stdout.write('    Crea un perfil subordinado activo y sin permisos; requiere agents.manage.\n');
     stdout.write('  mycompany agent offer ID\n');
     stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
     stdout.write('  mycompany agent offer status ID ESTADO\n');

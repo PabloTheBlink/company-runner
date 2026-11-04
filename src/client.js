@@ -821,6 +821,57 @@ export class AgentClient {
         return response.body;
     }
 
+    async createAgent(agentData, currentDirectory = process.cwd()) {
+        if (agentData === null || typeof agentData !== 'object' || Array.isArray(agentData)) {
+            throw new Error('Indica un nombre para el nuevo agente.');
+        }
+        const allowedFields = new Set(['name', 'role', 'instructions']);
+        if (Object.keys(agentData).some((field) => !allowedFields.has(field))) {
+            throw new Error('La creación solo permite nombre, rol e instrucciones.');
+        }
+        if (typeof agentData.name !== 'string' || agentData.name.trim() === '' || agentData.name.length > 120
+            || (agentData.role !== undefined && agentData.role !== null && (typeof agentData.role !== 'string' || agentData.role.length > 120))
+            || (agentData.instructions !== undefined && agentData.instructions !== null
+                && (typeof agentData.instructions !== 'string' || agentData.instructions.length > 10000))) {
+            throw new Error('Los datos del perfil de agente no son válidos.');
+        }
+        const payload = {
+            name: agentData.name,
+            role: agentData.role ?? null,
+            instructions: agentData.instructions ?? null,
+        };
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(`${serverUrl}/api/v1/agent/agents`, payload, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita agents.manage para crear perfiles directos (HTTP 403).');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó el perfil. Revisa el nombre y confirma que no exista otro igual en la empresa (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        const agent = response.body.agent;
+        if (response.status !== 201
+            || !Number.isSafeInteger(agent?.id)
+            || agent.id < 1
+            || typeof agent.uuid !== 'string'
+            || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(agent.uuid)
+            || agent.name !== payload.name
+            || agent.role !== payload.role
+            || agent.status !== 'active'
+            || agent.reports_to_agent_id !== configuration.agent_id
+            || !Array.isArray(agent.permissions)
+            || agent.permissions.length !== 0) {
+            throw new Error('MyCompanies devolvió una respuesta de creación de perfil Agent no válida.');
+        }
+        return agent;
+    }
+
     async getOffer(offerId, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(offerId) || offerId < 1) {
             throw new Error('El ID de oferta debe ser un entero positivo.');

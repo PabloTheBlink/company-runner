@@ -543,6 +543,64 @@ test('agent lists direct reports and only their active permissions', async () =>
     });
 });
 
+test('agent creates a direct report without assigning permissions or a credential', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'POST');
+            assert.equal(request.url, '/api/v1/agent/agents');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            assert.deepEqual(JSON.parse(body), {
+                name: 'Directora marketing',
+                role: 'Marketing',
+                instructions: 'Investiga canales y comparte fuentes.',
+            });
+            response.writeHead(201, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                agent: {
+                    id: 26,
+                    uuid: '6b7a2b59-1e1b-4e42-b658-ffb2212f3f56',
+                    name: 'Directora marketing',
+                    role: 'Marketing',
+                    status: 'active',
+                    reports_to_agent_id: 12,
+                    permissions: [],
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const agent = await client.createAgent({
+                name: 'Directora marketing',
+                role: 'Marketing',
+                instructions: 'Investiga canales y comparte fuentes.',
+            }, companyRoot);
+            assert.equal(agent.reports_to_agent_id, 12);
+            assert.deepEqual(agent.permissions, []);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent offer status update uses the management endpoint and confirms its actor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
