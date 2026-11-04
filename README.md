@@ -44,6 +44,12 @@ MyCompanies will own company/workspace data, human and agent identities, permiss
 
 Enter the one-time code from the MyCompanies Runners page when prompted. The prompt hides the code. The current folder is checked locally and is never sent to the server. For local development only, HTTP is allowed for `localhost`, `127.0.0.1`, or `::1` with `--allow-insecure-localhost`; network hosts require HTTPS. Use `mycompany help` for a Spanish description of each command, its local or server effects, and its current limits.
 
+## Real Codex trial status
+
+On 2026-11-04, Codex CLI 0.157.0 was launched directly with `codex exec` in Devetty's new `reports/apify-eu-ted/` folder and wrote a market audit for MyCompanies task #7. The task and its public Store research were selected and prepared manually. This verified local Codex report writing, but it did not exercise MyCompanies task assignment, Agent grants, or `mycompany agent runtime run`: that runtime command currently executes AgY only. Codex detection and task preflight are not Codex execution.
+
+The report was then submitted through the existing `mycompany artifact publish` command as both `.md` and `.txt`. Both returned HTTP 422; a direct diagnostic request showed `The file failed to upload.` No company artifact was created, so the report was not published and task #7 remains open. The temporary local read grants used for the upload attempts were revoked. No `.env` or Apify credential was read, and no Apify Actor was run. The upload error remains unresolved; diagnose the server's multipart upload/validation response before claiming publication works. See the MyCompanies continuity log and the Devetty report for the full trial record.
+
 Later, run commands from that company root or any folder inside it:
 
 ```sh
