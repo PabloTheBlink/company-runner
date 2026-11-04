@@ -140,7 +140,21 @@ mycompany agent forget
 
 `mycompany agent runtime files list` shows local file grants for the Agent identity selected in this company folder. Use `grant PATH --operation=read|write` or `revoke PATH --operation=read|write` to change one exact relative path. Each change requires entering the displayed confirmation phrase in an interactive terminal. `read` means the Agent may see the file contents; `write` permits changes. The policy and append-only change history are stored in the user's private configuration, separate from company files and server grants. Symlinks, absolute paths, traversal and terminal control characters are rejected.
 
-These commands record local policy only. They do not yet connect the policy to Codex/Claude or expose files to a model; no provider is started. The next runtime increment must use the staging mediator, recheck grants when applying edits, and ensure the provider cannot read outside its staged directory. A local grant does not authorize server API actions or network access.
+These commands record local policy; the controlled Antigravity task run below applies it through the staging mediator. The grants still do not authorize server API actions or network access. Codex and Claude Code remain preflight-only.
+
+### Run one assigned task with Antigravity CLI
+
+On Linux, a company owner/admin must grant the Agent `tasks.read` and assign an active task to it before this command can run:
+
+```sh
+mycompany agent runtime run 42 --provider=agy --timeout=300
+```
+
+The command fetches the active Agent identity and task, then asks for an exact interactive confirmation. The confirmation names the task and lists every `read` and `write` file path. The task description and files with `read` permission are sent to Antigravity's model service. MyCompanies does not receive the prompt or local file contents.
+
+The CLI stages only granted paths in a private temporary directory under the user's private MyCompanies config directory. It invokes `agy` without a shell, forces the terminal sandbox, disables non-workspace file access, and denies shell commands, unsandboxed commands, web actions, and MCP tools for that session. The task description is passed over stdin rather than exposed as process arguments. If the host sandbox cannot be verified, the provider is not started. On success, the CLI rechecks write grants and original file hashes, then applies only staged changes to exact `write` paths; extra files are discarded. Timeout, interruption, provider error, or invalid output applies no changes. The staging directory is removed after the run.
+
+The result is printed in the terminal; this local run does not change task status, create a server-side Execution record, or publish a report. Codex and Claude Code remain detection/preflight only. The first implementation uses Antigravity's documented [headless mode](https://antigravity.google/docs/cli/headless/), [sandbox](https://antigravity.google/docs/cli/sandbox), and [permission rules](https://antigravity.google/docs/cli/permissions); see `mycompany help` for the current CLI surface.
 
 ## Credential storage
 

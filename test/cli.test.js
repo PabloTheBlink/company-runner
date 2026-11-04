@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 import { listLocalAgentRuntimes } from '../src/runtime.js';
@@ -52,7 +52,7 @@ test('agent runtime reports installed providers without loading credentials or s
 
     assert.equal(await run(['agent', 'runtime'], { stdout: output }, process.cwd(), {}), 0);
     assert.match(output.value, /Diagnóstico local: no conecta con MyCompanies, no lee tareas ni credenciales y no inicia ninguna sesión/);
-    assert.match(output.value, /Siguiente paso futuro: elegir Agent y tarea/);
+    assert.match(output.value, /agent runtime run ID --provider=agy/);
     for (const runtime of runtimes) {
         assert.match(output.value, new RegExp(`${runtime.provider} \\(${runtime.command}\\)`));
     }
@@ -67,6 +67,24 @@ test('agent runtime plan requires a positive task ID and explicit supported prov
     assert.throws(() => parseAgentRuntimePlanOptions(['0', '--provider=codex']), /positivo/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=other']), /proveedor/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=codex', '--provider=claude']), /Uso:/);
+});
+
+test('agent runtime run requires a valid task, AgY provider, and bounded timeout', () => {
+    assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=agy']), {
+        taskId: 42,
+        provider: 'agy',
+        timeoutSeconds: 300,
+    });
+    assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--timeout=600', '--provider=agy']), {
+        taskId: 42,
+        provider: 'agy',
+        timeoutSeconds: 600,
+    });
+    assert.throws(() => parseAgentRuntimeRunOptions(['0', '--provider=agy']), /positivo/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=other']), /Opción desconocida/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=9']), /entre 10 y 900/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=901']), /entre 10 y 900/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=300', '--timeout=400']), /Uso:/);
 });
 
 test('agent runtime file access commands require one safe path and one explicit operation', () => {
@@ -207,6 +225,164 @@ test('agent runtime plan checks the selected Agent and assigned task without sta
     } finally {
         server.close();
         await once(server, 'close');
+    }
+});
+
+test('agent runtime run stages only granted files, applies only authorized writes, and cleans staging', async () => {
+    const testRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-run-test-'));
+    const companyRoot = path.join(testRoot, 'company');
+    const configRoot = path.join(testRoot, 'config');
+    const token = 'P'.repeat(80);
+    const requests = [];
+    const server = createServer((request, response) => {
+        requests.push(request.url);
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: 'CEO' },
+                company: { id: 4, name: 'Devetty' },
+                permissions: [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }],
+            }));
+            return;
+        }
+        assert.equal(request.url, '/api/v1/agent/tasks/42');
+        response.end(JSON.stringify({ task: {
+            id: 42,
+            title: 'Preparar informe',
+            description: 'Revisa los archivos autorizados y resume el estado.',
+            status: 'in_progress',
+            priority: 'normal',
+            due_date: null,
+            assignee: { type: 'agent', id: 12, name: 'Vera' },
+            workspace: { id: 5, name: 'Operaciones' },
+        } }));
+    });
+    await mkdir(companyRoot);
+    await mkdir(path.join(configRoot), { mode: 0o700 });
+    await mkdir(path.join(companyRoot, 'reports'));
+    await writeFile(path.join(companyRoot, '.env'), 'KEY=original\n', { mode: 0o600 });
+    const taskRunnerCalls = [];
+    const confirmations = [];
+    const configStore = {
+        localAgentFilePolicyPath: path.join(configRoot, 'agent-file-access.json'),
+        async loadAgentForDirectory() {
+            return {
+                server_url: `http://127.0.0.1:${server.address().port}`,
+                agent_id: 12,
+                company_id: 4,
+                allow_insecure_localhost: true,
+                api_token: token,
+            };
+        },
+        async listAgentFileAccessForDirectory(directory, agentId) {
+            assert.equal(directory, companyRoot);
+            assert.equal(agentId, 12);
+            return [
+                { path: '.env', operations: ['read', 'write'] },
+                { path: 'reports/daily.md', operations: ['write'] },
+            ];
+        },
+    };
+    const runtimeDetector = async () => [{ provider: 'agy', command: 'agy' }];
+    const agentRuntimeRunner = async (request) => {
+        taskRunnerCalls.push(request);
+        assert.notEqual(request.cwd, companyRoot);
+        assert.match(request.prompt, /Preparar informe/);
+        assert.match(request.prompt, /Revisa los archivos autorizados/);
+        assert.equal(await readFile(path.join(request.cwd, '.env'), 'utf8'), 'KEY=original\n');
+        assert.equal(await readFile(path.join(request.cwd, 'reports', 'daily.md'), 'utf8'), '');
+        await writeFile(path.join(request.cwd, '.env'), 'KEY=updated\n');
+        await writeFile(path.join(request.cwd, 'reports', 'daily.md'), 'Resumen\n');
+        await writeFile(path.join(request.cwd, 'unapproved.md'), 'No aplicar\n');
+        return { response: 'Informe listo' };
+    };
+    const agentRuntimeConfirmer = async (request) => {
+        confirmations.push(request);
+        return true;
+    };
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+
+    try {
+        assert.equal(await run(
+            ['agent', 'runtime', 'run', '42', '--provider=agy'],
+            { stdout: output, stderr: output },
+            companyRoot,
+            configStore,
+            runtimeDetector,
+            undefined,
+            agentRuntimeRunner,
+            agentRuntimeConfirmer,
+        ), 0);
+        assert.deepEqual(requests, ['/api/v1/agent/me', '/api/v1/agent/tasks/42']);
+        assert.equal(taskRunnerCalls.length, 1);
+        assert.equal(taskRunnerCalls[0].timeoutMs, 300_000);
+        assert.deepEqual(confirmations[0].fileSummary, {
+            read: ['.env'],
+            write: ['.env', 'reports/daily.md'],
+        });
+        assert.equal(await readFile(path.join(companyRoot, '.env'), 'utf8'), 'KEY=updated\n');
+        assert.equal(await readFile(path.join(companyRoot, 'reports', 'daily.md'), 'utf8'), 'Resumen\n');
+        await assert.rejects(stat(path.join(companyRoot, 'unapproved.md')), { code: 'ENOENT' });
+        assert.match(output.value, /Informe listo/);
+        assert.match(output.value, /Archivos actualizados: \.env, reports\/daily\.md/);
+        await assert.rejects(stat(taskRunnerCalls[0].cwd), { code: 'ENOENT' });
+    } finally {
+        server.close();
+        await once(server, 'close');
+        await rm(testRoot, { recursive: true, force: true });
+    }
+});
+
+test('agent runtime run does not start or stage files without typed confirmation', async () => {
+    const companyRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-run-denied-test-'));
+    const token = 'P'.repeat(80);
+    const server = createServer((request, response) => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: null },
+                company: { id: 4, name: 'Devetty' },
+                permissions: [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }],
+            }));
+            return;
+        }
+        response.end(JSON.stringify({ task: {
+            id: 42, title: 'Preparar informe', description: null, status: 'open', priority: 'normal', due_date: null,
+            assignee: { type: 'agent', id: 12, name: 'Vera' }, workspace: null,
+        } }));
+    });
+    let runtimeStarted = false;
+    const configStore = {
+        async loadAgentForDirectory() {
+            return {
+                server_url: `http://127.0.0.1:${server.address().port}`,
+                agent_id: 12, company_id: 4, allow_insecure_localhost: true, api_token: token,
+            };
+        },
+        async listAgentFileAccessForDirectory() { return []; },
+    };
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+
+    try {
+        await assert.rejects(run(
+            ['agent', 'runtime', 'run', '42', '--provider=agy'],
+            { stdout: { write() {} }, stderr: { write() {} } },
+            companyRoot,
+            configStore,
+            async () => [{ provider: 'agy', command: 'agy' }],
+            undefined,
+            async () => { runtimeStarted = true; },
+            async () => false,
+        ), /confirmación escrita/);
+        assert.equal(runtimeStarted, false);
+    } finally {
+        server.close();
+        await once(server, 'close');
+        await rm(companyRoot, { recursive: true, force: true });
     }
 });
 
@@ -490,6 +666,8 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent identities/);
     assert.match(output.value, /mycompany agent credential list AGENT_ID/);
     assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
+    assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=agy/);
+    assert.match(output.value, /deniega shell, web, MCP/);
     assert.match(output.value, /confirmación escrita en un terminal interactivo/);
     assert.match(output.value, /read expone el contenido al agente/);
     assert.doesNotMatch(output.value, /Dev\.to|devto/i);
