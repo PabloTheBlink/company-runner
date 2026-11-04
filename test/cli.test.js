@@ -335,7 +335,7 @@ test('agent runtime run stages only granted files, applies only authorized write
             agentRuntimeConfirmer,
             artifactPublisher,
         ), 0);
-        assert.deepEqual(requests, ['/api/v1/agent/me', '/api/v1/agent/tasks/42']);
+        assert.deepEqual(requests, ['/api/v1/agent/me', '/api/v1/agent/tasks/42', '/api/v1/agent/tasks/42']);
         assert.equal(taskRunnerCalls.length, 1);
         assert.equal(taskRunnerCalls[0].timeoutMs, 300_000);
         assert.deepEqual(confirmations[0].fileSummary, {
@@ -355,6 +355,83 @@ test('agent runtime run stages only granted files, applies only authorized write
         assert.match(output.value, /Archivos actualizados: \.env, reports\/daily\.md/);
         assert.match(output.value, /Informe #77 publicado para Preparar informe \(daily\.md\)/);
         await assert.rejects(stat(taskRunnerCalls[0].cwd), { code: 'ENOENT' });
+    } finally {
+        server.close();
+        await once(server, 'close');
+        await rm(testRoot, { recursive: true, force: true });
+    }
+});
+
+test('agent runtime run discards staged output if task instructions change while the provider is working', async () => {
+    const testRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-run-stale-task-test-'));
+    const companyRoot = path.join(testRoot, 'company');
+    const configRoot = path.join(testRoot, 'config');
+    const requestPaths = [];
+    let taskRequestCount = 0;
+    let publishCalls = 0;
+    const server = createServer((request, response) => {
+        requestPaths.push(request.url);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: null },
+                company: { id: 4, name: 'Devetty' },
+                permissions: [
+                    { name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'artifacts.publish', scope: 'company', workspace_id: null, workspace_name: null },
+                ],
+            }));
+            return;
+        }
+        taskRequestCount += 1;
+        response.end(JSON.stringify({ task: {
+            id: 42,
+            title: taskRequestCount === 1 ? 'Prepare weekly report' : 'Prepare a different report',
+            description: 'Use the approved source material.',
+            status: 'in_progress',
+            priority: 'normal',
+            due_date: null,
+            assignee: { type: 'agent', id: 12, name: 'Vera' },
+            workspace: null,
+        } }));
+    });
+    await mkdir(path.join(companyRoot, 'reports'), { recursive: true });
+    await mkdir(configRoot, { mode: 0o700 });
+    await writeFile(path.join(companyRoot, 'reports', 'weekly.md'), 'Original approved report\n');
+    const configStore = {
+        localAgentFilePolicyPath: path.join(configRoot, 'agent-file-access.json'),
+        async loadAgentForDirectory() {
+            return {
+                server_url: `http://127.0.0.1:${server.address().port}`,
+                agent_id: 12, company_id: 4, allow_insecure_localhost: true, api_token: 'P'.repeat(80),
+            };
+        },
+        async listAgentFileAccessForDirectory() {
+            return [{ path: 'reports/weekly.md', operations: ['read', 'write'] }];
+        },
+    };
+    const output = { write() {} };
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+
+    try {
+        await assert.rejects(run(
+            ['agent', 'runtime', 'run', '42', '--provider=agy', '--publish=reports/weekly.md'],
+            { stdout: output, stderr: output },
+            companyRoot,
+            configStore,
+            async () => [{ provider: 'agy', command: 'agy' }],
+            undefined,
+            async ({ cwd }) => {
+                await writeFile(path.join(cwd, 'reports', 'weekly.md'), 'Output based on stale task instructions\n');
+                return { response: 'The report is complete.' };
+            },
+            async () => true,
+            async () => { publishCalls += 1; },
+        ), /La tarea cambió mientras el proveedor trabajaba/);
+        assert.equal(await readFile(path.join(companyRoot, 'reports', 'weekly.md'), 'utf8'), 'Original approved report\n');
+        assert.equal(publishCalls, 0);
+        assert.deepEqual(requestPaths, ['/api/v1/agent/me', '/api/v1/agent/tasks/42', '/api/v1/agent/tasks/42']);
     } finally {
         server.close();
         await once(server, 'close');

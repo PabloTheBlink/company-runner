@@ -154,6 +154,8 @@ The command fetches the active Agent identity and task, then asks for an exact i
 
 The CLI stages only granted paths in a private temporary directory under the user's private MyCompanies config directory. It invokes `agy` without a shell, forces the terminal sandbox, disables non-workspace file access, and denies shell commands, unsandboxed commands, web actions, and MCP tools for that session. The task description is passed over stdin rather than exposed as process arguments. If the host sandbox cannot be verified, the provider is not started. On success, the CLI rechecks write grants and original file hashes, then applies only staged changes to exact `write` paths; extra files are discarded. Timeout, interruption, provider error, or invalid output applies no changes. The staging directory is removed after the run.
 
+Before applying staged changes, the CLI fetches the task again. It must still be active and assigned to the same Agent, and its title, description, priority, due date, and Workspace must match the values sent to the provider. If the assignment or task context changed, the CLI discards the staging directory and skips local writes and publication.
+
 Without `--publish`, the result is printed in the terminal; this local run does not change task status, create a server-side Execution record, or publish a report. Codex and Claude Code remain detection/preflight only. The first implementation uses Antigravity's documented [headless mode](https://antigravity.google/docs/cli/headless/), [sandbox](https://antigravity.google/docs/cli/sandbox), and [permission rules](https://antigravity.google/docs/cli/permissions); see `mycompany help` for the current CLI surface.
 
 To publish one generated report, pass its exact relative path:

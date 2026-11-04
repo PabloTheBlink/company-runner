@@ -220,6 +220,11 @@ export async function run(
                     if (typeof result?.response !== 'string') {
                         throw new Error('El proveedor no devolvió un resultado válido; no se aplicaron cambios locales.');
                     }
+                    const currentTask = await agentClient.getTask(options.taskId, currentDirectory);
+                    createAgentRuntimePlan(options.provider, installedRuntimes.map(({ provider }) => provider), identity, currentTask);
+                    if (getAgentRuntimeTaskFingerprint(task) !== getAgentRuntimeTaskFingerprint(currentTask)) {
+                        throw new Error('La tarea cambió mientras el proveedor trabajaba; no se aplicaron cambios locales ni se publicó un informe.');
+                    }
                     const writtenPaths = await applyLocalAgentFileWrites({
                         agentId: plan.agentId,
                         grants: fileGrants,
@@ -856,6 +861,18 @@ function hasAgentCompanyPermission(identity, permissionName) {
 
     return identity.permissions.some((permission) => permission?.name === permissionName
         && permission.scope === 'company');
+}
+
+function getAgentRuntimeTaskFingerprint(task) {
+    return JSON.stringify({
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        priority: task.priority,
+        due_date: task.due_date,
+        assignee: { type: task.assignee.type, id: task.assignee.id },
+        workspace: task.workspace === null ? null : { id: task.workspace.id, name: task.workspace.name },
+    });
 }
 
 function createAgentRuntimePrompt(identity, task) {
