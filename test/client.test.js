@@ -174,6 +174,53 @@ test('agent task listing uses the Agent credential, cursor and company scope ret
     });
 });
 
+test('agent task detail retrieves only the requested task and accepts a company-level task without Workspace', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.url, '/api/v1/agent/tasks/26');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                task: {
+                    id: 26,
+                    title: 'Revisar informe',
+                    description: 'Comparar resultados con los objetivos acordados.',
+                    status: 'open',
+                    priority: 'normal',
+                    due_date: null,
+                    assignee: null,
+                    workspace: null,
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const task = await new AgentClient(configStore).getTask(26, companyRoot);
+            assert.equal(task.description, 'Comparar resultados con los objetivos acordados.');
+            assert.equal(task.workspace, null);
+            await assert.rejects(new AgentClient(configStore).getTask(0, companyRoot), /entero positivo/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('heartbeat does not follow redirects or expose the token in errors', async () => {
     await withTemporaryDirectory(async (directory) => {
         const workspacePath = path.join(directory, 'workspace');

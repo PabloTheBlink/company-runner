@@ -69,10 +69,12 @@ Create a runtime credential from the company's Agents page and enter it when pro
 ```sh
 mycompany agent login --server=https://YOUR-MYCOMPANIES-HOST
 mycompany agent me
+mycompany agent tasks
+mycompany agent task 42
 mycompany agent forget
 ```
 
-`agent me` fetches the current identity and grants from MyCompanies, so pausing the profile or revoking its credential takes effect on the next request. `agent tasks` lists only active tasks inside the grants currently accepted by the server. It does not create, assign, edit, or execute tasks as an Agent.
+`agent me` fetches the current identity and grants from MyCompanies, so pausing the profile or revoking its credential takes effect on the next request. `agent tasks` lists only active tasks inside the grants currently accepted by the server; `agent task ID` shows one task's details as plain text. Neither command creates, assigns, edits, or executes tasks as an Agent.
 
 ## Credential storage
 

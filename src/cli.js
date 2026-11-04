@@ -60,6 +60,22 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'task' && agentArguments.length === 1) {
+            const taskId = parseTaskId(agentArguments[0]);
+            const task = await agentClient.getTask(taskId, currentDirectory);
+            const status = { open: 'abierta', in_progress: 'en curso', blocked: 'bloqueada' }[task.status];
+            const priority = { low: 'baja', normal: 'normal', high: 'alta' }[task.priority];
+            const dueDate = task.due_date === null ? 'sin fecha objetivo' : `vence ${task.due_date}`;
+            const workspaceName = task.workspace === null ? 'Empresa' : safeTerminalText(task.workspace.name);
+            streams.stdout.write(`#${task.id} · ${safeTerminalText(task.title)}\n`);
+            streams.stdout.write(`Workspace: ${workspaceName}\n`);
+            streams.stdout.write(`Responsable: ${formatAssignee(task.assignee)}\n`);
+            streams.stdout.write(`Estado: ${status} · Prioridad: ${priority} · ${dueDate}\n`);
+            if (task.description !== null && task.description !== '') {
+                streams.stdout.write(`\n${safeTerminalText(task.description)}\n`);
+            }
+            return 0;
+        }
         if (agentCommand === 'forget' && agentArguments.length === 0) {
             await agentClient.forget(currentDirectory);
             streams.stdout.write('Credencial Agent local eliminada. Revócala también en MyCompanies para invalidarla en el servidor.\n');
@@ -321,6 +337,8 @@ function printHelp(stdout) {
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
     stdout.write('  mycompany agent tasks [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
+    stdout.write('  mycompany agent task ID\n');
+    stdout.write('    Consulta una tarea activa dentro del ámbito Agent y muestra descripción y detalles como texto. No interpreta instrucciones.\n');
     stdout.write('  mycompany agent forget\n');
     stdout.write('    Elimina la credencial Agent local de esta carpeta. No la revoca en MyCompanies.\n');
     stdout.write('\nAlcance actual: no hay sincronización automática ni comando sync. init solo gestiona archivos locales; heartbeat, work y tasks consultan la API.\n');

@@ -373,6 +373,31 @@ export class AgentClient {
         return response.body;
     }
 
+    async getTask(taskId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/tasks/${taskId}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene un permiso de lectura de tareas para su ámbito (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La tarea no existe o no está disponible para el ámbito de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || !isAgentTask(response.body.task, true)) {
+            throw new Error('MyCompanies devolvió un detalle de tarea Agent no válido.');
+        }
+        return response.body.task;
+    }
+
     async requestIdentity(serverUrl, apiToken) {
         const response = await this.getJson(`${serverUrl}/api/v1/agent/me`, apiToken);
         if (response.status === 401) {
@@ -457,7 +482,7 @@ function isRunnerAssignee(assignee) {
         && typeof assignee.name === 'string';
 }
 
-function isAgentTask(task) {
+function isAgentTask(task, includeDescription = false) {
     return task !== null
         && typeof task === 'object'
         && Number.isInteger(task.id)
@@ -465,6 +490,7 @@ function isAgentTask(task) {
         && typeof task.title === 'string'
         && ['open', 'in_progress', 'blocked'].includes(task.status)
         && ['low', 'normal', 'high'].includes(task.priority)
+        && (!includeDescription || task.description === null || typeof task.description === 'string')
         && (task.assignee === null || isRunnerAssignee(task.assignee))
         && (task.due_date === null || /^\d{4}-\d{2}-\d{2}$/.test(task.due_date))
         && (task.workspace === null

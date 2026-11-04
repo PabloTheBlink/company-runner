@@ -64,6 +64,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent login/);
     assert.match(output.value, /mycompany agent me/);
     assert.match(output.value, /mycompany agent tasks/);
+    assert.match(output.value, /mycompany agent task ID/);
     assert.match(output.value, /no hay sincronización automática/);
     assert.match(output.value, /no se crea una carpeta por Workspace/);
     assert.match(output.value, /no conecta con el servidor/);
