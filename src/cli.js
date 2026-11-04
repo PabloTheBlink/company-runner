@@ -161,6 +161,30 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'assets') {
+            const options = parseAgentAssetsOptions(agentArguments);
+            const result = await agentClient.listAssets(currentDirectory, options.afterId);
+            if (result.assets.length === 0) {
+                streams.stdout.write('No hay activos registrados para esta empresa.\n');
+                return 0;
+            }
+            streams.stdout.write(`Activos de la empresa (${result.assets.length}):\n`);
+            for (const asset of result.assets) {
+                const url = asset.url === null ? '' : ` · ${safeTerminalText(asset.url)}`;
+                streams.stdout.write(`#${asset.id} [${safeTerminalText(asset.type)}] ${safeTerminalText(asset.name)}${url}\n`);
+            }
+            if (result.has_more) {
+                streams.stdout.write(`Hay más activos. Continúa con: mycompany agent assets --after=${result.next_after}\n`);
+            }
+            return 0;
+        }
+        if (agentCommand === 'asset') {
+            const asset = await agentClient.getAsset(parseAgentAssetId(agentArguments), currentDirectory);
+            streams.stdout.write(`#${asset.id} · ${safeTerminalText(asset.name)}\nTipo: ${safeTerminalText(asset.type)}\n`);
+            if (asset.url !== null) streams.stdout.write(`URL: ${safeTerminalText(asset.url)}\n`);
+            if (asset.description !== null && asset.description !== '') streams.stdout.write(`Descripción: ${safeTerminalText(asset.description)}\n`);
+            return 0;
+        }
         if (agentCommand === 'goal') {
             const goal = await agentClient.getGoal(parseAgentGoalId(agentArguments), currentDirectory);
             const status = { planned: 'Previsto', active: 'Activo', completed: 'Completado', cancelled: 'Cancelado' }[goal.status];
@@ -442,6 +466,19 @@ export function parseAgentGoalsOptions(argumentsList) {
 
 export function parseAgentGoalId(argumentsList) {
     if (argumentsList.length !== 1) throw new Error('Uso: mycompany agent goal ID.');
+    return parseTaskId(argumentsList[0]);
+}
+
+export function parseAgentAssetsOptions(argumentsList) {
+    if (argumentsList.length === 0) return { afterId: null };
+    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent assets. Usa --after=ID.');
+    const match = /^--after=(.+)$/.exec(argumentsList[0]);
+    if (match === null) throw new Error('Opción desconocida para agent assets. Usa --after=ID.');
+    return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentAssetId(argumentsList) {
+    if (argumentsList.length !== 1) throw new Error('Uso: mycompany agent asset ID.');
     return parseTaskId(argumentsList[0]);
 }
 
@@ -790,6 +827,10 @@ function printHelp(stdout) {
     stdout.write('    Lista objetivos de la empresa con goals.read o goals.manage.\n');
     stdout.write('  mycompany agent goal ID\n');
     stdout.write('    Muestra la descripción y el criterio de éxito de un objetivo permitido.\n');
+    stdout.write('  mycompany agent assets [--after=ID]\n');
+    stdout.write('    Lista activos de la empresa con assets.read o assets.manage.\n');
+    stdout.write('  mycompany agent asset ID\n');
+    stdout.write('    Muestra los datos de un activo permitido.\n');
     stdout.write('  mycompany agent offer ID\n');
     stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
     stdout.write('  mycompany agent offer status ID ESTADO\n');

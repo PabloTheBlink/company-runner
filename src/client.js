@@ -675,6 +675,63 @@ export class AgentClient {
         return response.body.goal;
     }
 
+    async listAssets(currentDirectory = process.cwd(), afterId = null) {
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de activos debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/assets${cursor}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene assets.read o assets.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.assets)
+            || response.body.assets.length > 100
+            || typeof response.body.has_more !== 'boolean'
+            || response.body.assets.some((asset) => !isAgentAssetSummary(asset))
+            || (response.body.has_more
+                ? !Number.isInteger(response.body.next_after)
+                    || response.body.next_after < 1
+                    || response.body.assets.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
+            throw new Error('MyCompanies devolvió una lista de activos Agent no válida.');
+        }
+        return response.body;
+    }
+
+    async getAsset(assetId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(assetId) || assetId < 1) {
+            throw new Error('El ID de activo debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/assets/${assetId}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene assets.read o assets.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El activo no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || !isAgentAsset(response.body.asset)) {
+            throw new Error('MyCompanies devolvió un detalle de activo Agent no válido.');
+        }
+        return response.body.asset;
+    }
+
     async getOffer(offerId, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(offerId) || offerId < 1) {
             throw new Error('El ID de oferta debe ser un entero positivo.');
@@ -1337,6 +1394,16 @@ function isAgentGoalSummary(goal) {
         && (goal.target_date === null || /^\d{4}-\d{2}-\d{2}$/.test(goal.target_date));
 }
 
+function isAgentAssetSummary(asset) {
+    return asset !== null
+        && typeof asset === 'object'
+        && Number.isSafeInteger(asset.id)
+        && asset.id > 0
+        && typeof asset.name === 'string'
+        && typeof asset.type === 'string'
+        && (asset.url === null || typeof asset.url === 'string');
+}
+
 function isArtifactSummary(artifact) {
     return artifact !== null
         && typeof artifact === 'object'
@@ -1372,6 +1439,11 @@ function isAgentGoal(goal) {
     return isAgentGoalSummary(goal)
         && (goal.description === null || typeof goal.description === 'string')
         && typeof goal.success_criteria === 'string';
+}
+
+function isAgentAsset(asset) {
+    return isAgentAssetSummary(asset)
+        && (asset.description === null || typeof asset.description === 'string');
 }
 
 function isAgentBetSummary(bet) {

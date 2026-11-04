@@ -391,6 +391,59 @@ test('agent goal list and detail use the company-scoped read API', async () => {
     });
 });
 
+test('agent asset list and detail use the company-scoped read API', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (request.url === '/api/v1/agent/assets?after_id=25') {
+                response.end(JSON.stringify({
+                    assets: [{ id: 26, name: 'devetty.es', type: 'domain', url: 'https://devetty.es' }],
+                    has_more: false,
+                    next_after: null,
+                }));
+                return;
+            }
+            assert.equal(request.url, '/api/v1/agent/assets/26');
+            response.end(JSON.stringify({
+                asset: {
+                    id: 26,
+                    name: 'devetty.es',
+                    type: 'domain',
+                    description: 'Dominio principal.',
+                    url: 'https://devetty.es',
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const list = await client.listAssets(companyRoot, 25);
+            assert.equal(list.assets[0].url, 'https://devetty.es');
+            const detail = await client.getAsset(26, companyRoot);
+            assert.equal(detail.description, 'Dominio principal.');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent offer status update uses the management endpoint and confirms its actor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
