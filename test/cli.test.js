@@ -31,6 +31,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.equal(await run(['help'], { stdout: output }), 0);
     assert.match(output.value, /mycompany heartbeat/);
     assert.match(output.value, /mycompany work/);
+    assert.match(output.value, /mycompany tasks/);
     assert.doesNotMatch(output.value, /company-runner/);
 });
 

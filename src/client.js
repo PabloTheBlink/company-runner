@@ -160,6 +160,25 @@ export class RunnerClient {
         };
     }
 
+    async listTasks(currentDirectory = process.cwd()) {
+        const configuration = await this.configStore.loadForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/runner/tasks`, configuration.api_token);
+
+        if (response.status === 401) {
+            throw new Error('La credencial Runner fue rechazada (HTTP 401). Comprueba si fue revocada.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.tasks)
+            || response.body.tasks.length > 100
+            || typeof response.body.has_more !== 'boolean'
+            || response.body.tasks.some((task) => !isRunnerTask(task))) {
+            throw new Error('MyCompanies devolvió una respuesta de tareas no válida.');
+        }
+
+        return response.body;
+    }
+
     async postJson(endpoint, payload, apiToken = '') {
         let response;
         try {
@@ -201,6 +220,59 @@ export class RunnerClient {
             throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
         }
     }
+
+    async getJson(endpoint, apiToken) {
+        let response;
+        try {
+            response = await this.fetch(endpoint, {
+                method: 'GET',
+                headers: {
+                    Accept: 'application/json',
+                    Authorization: `Bearer ${apiToken}`,
+                },
+                redirect: 'manual',
+                signal: AbortSignal.timeout(10_000),
+            });
+        } catch {
+            throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
+        }
+
+        if (response.status === 401 || response.status === 404 || response.status === 429 || response.status >= 300) {
+            return { status: response.status, body: {} };
+        }
+
+        let responseText;
+        try {
+            responseText = await readResponseLimited(response, MAX_RESPONSE_BYTES);
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta demasiado grande o no válida.');
+        }
+        try {
+            const body = JSON.parse(responseText);
+            if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+                throw new Error('Invalid response shape.');
+            }
+            return { status: response.status, body };
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
+        }
+    }
+}
+
+function isRunnerTask(task) {
+    return task !== null
+        && typeof task === 'object'
+        && Number.isInteger(task.id)
+        && task.id > 0
+        && typeof task.title === 'string'
+        && ['open', 'in_progress', 'blocked'].includes(task.status)
+        && ['low', 'normal', 'high'].includes(task.priority)
+        && (task.due_date === null || /^\d{4}-\d{2}-\d{2}$/.test(task.due_date))
+        && task.workspace !== null
+        && typeof task.workspace === 'object'
+        && Number.isInteger(task.workspace.id)
+        && task.workspace.id > 0
+        && typeof task.workspace.name === 'string';
 }
 
 async function readResponseLimited(response, maximumBytes) {

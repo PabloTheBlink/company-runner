@@ -256,3 +256,74 @@ test('workspace check rejects unknown capabilities without running or reporting 
         }
     });
 });
+
+test('task listing requests the authenticated runner tasks without sending local paths', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const token = 'T'.repeat(80);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const server = createServer((request, response) => {
+            assert.equal(request.method, 'GET');
+            assert.equal(request.url, '/api/v1/runner/tasks');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                tasks: [{
+                    id: 42,
+                    title: 'Revisar métricas',
+                    status: 'in_progress',
+                    priority: 'high',
+                    due_date: '2026-11-30',
+                    workspace: { id: 9, name: 'Operaciones' },
+                }],
+                has_more: false,
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const tasks = await new RunnerClient(configStore).listTasks(workspacePath);
+            assert.equal(tasks.has_more, false);
+            assert.equal(tasks.tasks[0].title, 'Revisar métricas');
+            assert.equal(JSON.stringify(tasks).includes(workspacePath), false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('task listing rejects unexpected or malformed task response data', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const workspacePath = path.join(directory, 'workspace');
+        await mkdir(workspacePath);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const server = createServer((_request, response) => {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ tasks: [{ id: 1, title: 'Tarea sin estado' }], has_more: false }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: workspacePath,
+            allow_insecure_localhost: true,
+            api_token: 'T'.repeat(80),
+        });
+
+        try {
+            await assert.rejects(new RunnerClient(configStore).listTasks(workspacePath), /respuesta de tareas no válida/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});

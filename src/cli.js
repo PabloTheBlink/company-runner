@@ -46,6 +46,27 @@ export async function run(argumentsList, streams = process) {
         return 0;
     }
 
+    if (command === 'tasks') {
+        if (argumentsAfterCommand.length !== 0) throw new Error('tasks no admite opciones.');
+        const result = await client.listTasks();
+        if (result.tasks.length === 0) {
+            streams.stdout.write('No hay tareas activas en los workspaces asignados.\n');
+            return 0;
+        }
+
+        streams.stdout.write(`Tareas activas (${result.tasks.length}):\n`);
+        for (const task of result.tasks) {
+            const status = { open: 'abierta', in_progress: 'en curso', blocked: 'bloqueada' }[task.status];
+            const priority = { low: 'baja', normal: 'normal', high: 'alta' }[task.priority];
+            const dueDate = task.due_date === null ? '' : ` · vence ${task.due_date}`;
+            streams.stdout.write(`#${task.id} [${status} · ${priority}] ${safeTerminalText(task.workspace.name)} · ${safeTerminalText(task.title)}${dueDate}\n`);
+        }
+        if (result.has_more) {
+            streams.stdout.write('Hay más de 100 tareas activas; limita el trabajo a las primeras 100 mostradas.\n');
+        }
+        return 0;
+    }
+
     if (command === 'forget') {
         if (argumentsAfterCommand.length !== 0) throw new Error('forget no admite opciones.');
         await configStore.forget(process.cwd());
@@ -151,7 +172,12 @@ function printHelp(stdout) {
     stdout.write('  mycompany enroll --server=URL [--allow-insecure-localhost]\n');
     stdout.write('  mycompany heartbeat\n');
     stdout.write('  mycompany work\n');
+    stdout.write('  mycompany tasks\n');
     stdout.write('  mycompany forget\n');
+}
+
+function safeTerminalText(value) {
+    return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
