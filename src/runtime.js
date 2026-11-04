@@ -5,10 +5,11 @@ import path from 'node:path';
 const SUPPORTED_PROVIDERS = [
     { provider: 'codex', command: 'codex' },
     { provider: 'claude', command: 'claude' },
+    { provider: 'agy', command: 'agy' },
 ];
 
 export function createAgentRuntimePlan(provider, installedProviders, identity, task) {
-    if (!['codex', 'claude'].includes(provider) || !installedProviders.includes(provider)) {
+    if (!SUPPORTED_PROVIDERS.some((runtime) => runtime.provider === provider) || !installedProviders.includes(provider)) {
         throw new Error(`El proveedor ${provider} no está instalado localmente.`);
     }
     if (!Number.isSafeInteger(identity?.agent?.id) || identity.agent.id < 1

@@ -37,7 +37,11 @@ test('lists supported local providers without returning executable paths', async
     assert.deepEqual(await listLocalAgentRuntimes('/bin:/tools', 'linux', isRunnable), [
         { provider: 'codex', command: 'codex' },
     ]);
-    assert.deepEqual(checkedPaths, ['/bin/codex', '/tools/codex', '/bin/claude', '/tools/claude']);
+    assert.deepEqual(checkedPaths, [
+        '/bin/codex', '/tools/codex',
+        '/bin/claude', '/tools/claude',
+        '/bin/agy', '/tools/agy',
+    ]);
 });
 
 test('reports no local runtimes when PATH is empty', async () => {
@@ -68,4 +72,5 @@ test('builds a runtime plan only for a task assigned to the selected active Agen
     assert.throws(() => createAgentRuntimePlan('codex', ['claude'], identity, task), /no está instalado/);
     assert.throws(() => createAgentRuntimePlan('codex', ['codex'], identity, { ...task, assignee: { type: 'agent', id: 13, name: 'Otra' } }), /asignada/);
     assert.throws(() => createAgentRuntimePlan('codex', ['codex'], identity, { ...task, status: 'blocked' }), /abierta o en curso/);
+    assert.equal(createAgentRuntimePlan('agy', ['agy'], identity, task).provider, 'agy');
 });

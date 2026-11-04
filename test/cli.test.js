@@ -62,6 +62,7 @@ test('agent runtime reports installed providers without loading credentials or s
 test('agent runtime plan requires a positive task ID and explicit supported provider', () => {
     assert.deepEqual(parseAgentRuntimePlanOptions(['42', '--provider=codex']), { taskId: 42, provider: 'codex' });
     assert.deepEqual(parseAgentRuntimePlanOptions(['42', '--provider=claude']), { taskId: 42, provider: 'claude' });
+    assert.deepEqual(parseAgentRuntimePlanOptions(['42', '--provider=agy']), { taskId: 42, provider: 'agy' });
     assert.throws(() => parseAgentRuntimePlanOptions(['42']), /provider/);
     assert.throws(() => parseAgentRuntimePlanOptions(['0', '--provider=codex']), /positivo/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=other']), /proveedor/);
@@ -478,7 +479,7 @@ test('the executable command is named mycompany and help uses that name', async 
     const capabilitiesHelp = output.value.split('mycompany capabilities')[1].split('mycompany tasks')[0];
     assert.match(workHelp, /comprobación autorizada/);
     assert.match(capabilitiesHelp, /localmente/);
-    assert.match(capabilitiesHelp, /No conecta con MyCompanies ni Dev\.to/);
+    assert.match(capabilitiesHelp, /No conecta con MyCompanies, no inspecciona archivos de secretos/);
     const executeHelp = output.value.split('mycompany execute')[1].split('mycompany tasks')[0];
     assert.match(executeHelp, /después de que MyCompanies confirme \/start/);
     assert.match(executeHelp, /no hace polling/);
@@ -491,6 +492,9 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
     assert.match(output.value, /confirmación escrita en un terminal interactivo/);
     assert.match(output.value, /read expone el contenido al agente/);
+    assert.doesNotMatch(output.value, /Dev\.to|devto/i);
+    assert.match(output.value, /mycompany agent runtime plan TASK_ID --provider=codex\|claude\|agy/);
+    assert.match(output.value, /Detecta Codex, Claude Code y Antigravity CLI/);
     assert.match(output.value, /mycompany agent me/);
     assert.match(output.value, /mycompany agent tasks/);
     assert.match(output.value, /mycompany agent bets/);

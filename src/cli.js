@@ -152,7 +152,8 @@ export async function run(
                 const identity = await agentClient.identity(currentDirectory);
                 const task = await agentClient.getTask(options.taskId, currentDirectory);
                 const plan = createAgentRuntimePlan(options.provider, installedRuntimes.map(({ provider }) => provider), identity, task);
-                const providerLabel = plan.provider === 'codex' ? 'Codex' : 'Claude Code';
+                const providerLabels = { codex: 'Codex', claude: 'Claude Code', agy: 'Antigravity CLI' };
+                const providerLabel = providerLabels[plan.provider];
                 const statusLabel = plan.taskStatus === 'open' ? 'abierta' : 'en curso';
                 streams.stdout.write('Plan de ejecución local (no iniciado):\n');
                 streams.stdout.write(`Empresa: ${safeTerminalText(plan.companyName)} · Agent: ${safeTerminalText(plan.agentName)} (#${plan.agentId})\n`);
@@ -165,7 +166,7 @@ export async function run(
             if (agentArguments.length !== 0) throw new Error('Uso: mycompany agent runtime | plan TASK_ID --provider=codex|claude | files list|grant|revoke.');
             const runtimes = await runtimeDetector();
             if (runtimes.length === 0) {
-                streams.stdout.write('No se encontró Codex ni Claude Code en PATH.\n');
+                    streams.stdout.write('No se encontró Codex, Claude Code ni Antigravity CLI (agy) en PATH.\n');
             } else {
                 streams.stdout.write(`Proveedores locales detectados: ${runtimes.map(({ provider, command }) => `${provider} (${command})`).join(', ')}.\n`);
             }
@@ -691,12 +692,12 @@ export function parseAgentLoginOptions(argumentsList) {
 
 export function parseAgentRuntimePlanOptions(argumentsList) {
     if (argumentsList.length !== 2 || !argumentsList[1].startsWith('--provider=')) {
-        throw new Error('Uso: mycompany agent runtime plan TASK_ID --provider=codex|claude.');
+        throw new Error('Uso: mycompany agent runtime plan TASK_ID --provider=codex|claude|agy.');
     }
 
     const provider = argumentsList[1].slice('--provider='.length);
-    if (!['codex', 'claude'].includes(provider)) {
-        throw new Error('El proveedor debe ser codex o claude.');
+    if (!['codex', 'claude', 'agy'].includes(provider)) {
+        throw new Error('El proveedor debe ser codex, claude o agy.');
     }
 
     return { taskId: parseTaskId(argumentsList[0]), provider };
@@ -1263,11 +1264,11 @@ function printHelp(stdout) {
     stdout.write('    Consulta si hay una comprobación autorizada de capacidad fija, comprueba acceso de lectura a la carpeta y devuelve solo ese resultado.\n');
     stdout.write('    No ejecuta código o comandos enviados por el servidor ni transmite la ruta local.\n');
     stdout.write('  mycompany execute\n');
-    stdout.write('    Reclama una autorización manual y ejecuta solo devto.stats.totals@1.0.0 después de que MyCompanies confirme /start.\n');
-    stdout.write('    Envía métricas filtradas; no ejecuta comandos recibidos, no hace polling ni programa tareas.\n');
+    stdout.write('    Reclama una autorización manual y ejecuta la capacidad fija incluida en esta versión después de que MyCompanies confirme /start.\n');
+    stdout.write('    Devuelve solo el resultado validado por esa capacidad; no ejecuta código recibido, no hace polling ni programa tareas.\n');
     stdout.write('  mycompany capabilities\n');
     stdout.write('    Comprueba localmente qué adaptadores están instalados en la carpeta de empresa. No ejecuta los adaptadores.\n');
-    stdout.write('    No conecta con MyCompanies ni Dev.to y no lee .env ni muestra credenciales.\n');
+    stdout.write('    No conecta con MyCompanies, no inspecciona archivos de secretos ni muestra credenciales.\n');
     stdout.write('  mycompany tasks [--status=open|in_progress|blocked] [--after=ID]\n');
     stdout.write('    Consulta y lista tareas activas de los Workspaces asignados. Usa --after=ID para continuar una lista larga.\n');
     stdout.write('    Solo las muestra. No reclama, modifica, marca como terminadas ni ejecuta sus descripciones.\n');
@@ -1285,8 +1286,8 @@ function printHelp(stdout) {
     stdout.write('  mycompany agent me\n');
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
     stdout.write('  mycompany agent runtime\n');
-    stdout.write('    Detecta Codex y Claude Code en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
-    stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude\n');
+    stdout.write('    Detecta Codex, Claude Code y Antigravity CLI (agy) en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
+    stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude|agy\n');
     stdout.write('    Comprueba identidad, acceso a tarea y asignación del Agent. Solo muestra un plan; no inicia un modelo.\n');
     stdout.write('  mycompany agent runtime files list | grant RUTA --operation=read|write | revoke RUTA --operation=read|write\n');
     stdout.write('    Administra permisos de archivos locales para la identidad Agent seleccionada. grant y revoke requieren confirmación escrita en un terminal interactivo.\n');
