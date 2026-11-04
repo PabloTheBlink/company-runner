@@ -95,6 +95,15 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'offer' && agentArguments[0] === 'status') {
+            const options = parseAgentOfferStatusOptions(agentArguments.slice(1));
+            const result = await agentClient.updateOfferStatus(options.offerId, options.status, currentDirectory);
+            const status = { preparing: 'en preparación', available: 'disponible', withdrawn: 'retirada' }[result.status];
+            streams.stdout.write(result.changed
+                ? `Oferta #${result.id}: estado actualizado a ${status} por ${safeTerminalText(result.changed_by.name)}.\n`
+                : `Oferta #${result.id}: ya estaba en estado ${status}; no se añadió historial.\n`);
+            return 0;
+        }
         if (agentCommand === 'offer') {
             const offerId = parseAgentOfferId(agentArguments);
             const offer = await agentClient.getOffer(offerId, currentDirectory);
@@ -351,6 +360,16 @@ export function parseAgentOffersOptions(argumentsList) {
 export function parseAgentOfferId(argumentsList) {
     if (argumentsList.length !== 1) throw new Error('Uso: mycompany agent offer ID.');
     return parseTaskId(argumentsList[0]);
+}
+
+export function parseAgentOfferStatusOptions(argumentsList) {
+    if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent offer status ID ESTADO.');
+    const [offerId, status] = argumentsList;
+    if (!['preparing', 'available', 'withdrawn'].includes(status)) {
+        throw new Error('El estado no es válido; usa preparing, available o withdrawn.');
+    }
+
+    return { offerId: parseTaskId(offerId), status };
 }
 
 export function parseAgentBetEvidenceOptions(argumentsList) {
@@ -616,6 +635,8 @@ function printHelp(stdout) {
     stdout.write('    Lista ofertas de la empresa con offers.read o offers.manage.\n');
     stdout.write('  mycompany agent offer ID\n');
     stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
+    stdout.write('  mycompany agent offer status ID ESTADO\n');
+    stdout.write('    Cambia el estado con offers.manage y registra al agente en el historial.\n');
     stdout.write('  mycompany agent bet ID\n');
     stdout.write('    Muestra hipótesis, descripción y evidencias de una apuesta permitida, como texto sin ejecutarlas.\n');
     stdout.write('  mycompany agent bet evidence ID --title=TEXTO --details=TEXTO --assessment=supports|challenges|neutral [--source-url=URL]\n');

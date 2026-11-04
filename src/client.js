@@ -457,6 +457,50 @@ export class AgentClient {
         return response.body.offer;
     }
 
+    async updateOfferStatus(offerId, status, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(offerId) || offerId < 1) {
+            throw new Error('El ID de oferta debe ser un entero positivo.');
+        }
+        if (!['preparing', 'available', 'withdrawn'].includes(status)) {
+            throw new Error('El estado de oferta no es válido.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.patchJson(
+            `${serverUrl}/api/v1/agent/offers/${offerId}/status`,
+            { status },
+            configuration.api_token,
+        );
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita offers.manage para cambiar el estado (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La oferta no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó el estado solicitado (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        const offer = response.body.offer;
+        if (response.status !== 200
+            || offer?.id !== offerId
+            || offer.status !== status
+            || typeof offer.changed !== 'boolean'
+            || (offer.changed
+                ? offer.changed_by?.type !== 'agent'
+                    || !Number.isInteger(offer.changed_by.id)
+                    || typeof offer.changed_by.name !== 'string'
+                : offer.changed_by !== null)) {
+            throw new Error('MyCompanies devolvió una respuesta de cambio de estado de oferta no válida.');
+        }
+        return offer;
+    }
+
     async listBets(currentDirectory = process.cwd(), afterId = null) {
         if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
             throw new Error('El cursor de apuestas debe ser un entero positivo.');
