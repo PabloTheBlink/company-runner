@@ -4,7 +4,7 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import test from 'node:test';
-import { RunnerClient, normalizeServerUrl } from '../src/client.js';
+import { AgentClient, RunnerClient, normalizeServerUrl } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 
 async function withTemporaryDirectory(runTest) {
@@ -89,6 +89,39 @@ test('server URLs require HTTPS except explicitly allowed loopback', () => {
     assert.throws(() => normalizeServerUrl('http://example.com', true), /Usa HTTPS/);
     assert.throws(() => normalizeServerUrl('http://127.0.0.1:8150'), /Usa HTTPS/);
     assert.throws(() => normalizeServerUrl('https://example.com/path'), /URL base/);
+});
+
+test('agent login verifies identity before storing its credential separately from Runner', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        const nestedProject = path.join(companyRoot, 'repo');
+        await mkdir(nestedProject, { recursive: true });
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.url, '/api/v1/agent/me');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                agent: { id: 12, uuid: 'c376a06b-8b47-4b50-9438-3a522af9f1fa', name: 'Vera', role: 'CEO' },
+                company: { id: 4, name: 'Devetty' },
+                permissions: [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }],
+            }));
+        });
+        const serverUrl = await listen(server);
+
+        try {
+            const client = new AgentClient(configStore);
+            const identity = await client.login(serverUrl, token, companyRoot, true);
+            assert.equal(identity.agent.name, 'Vera');
+            assert.equal(identity.company.name, 'Devetty');
+            assert.deepEqual(await client.identity(nestedProject), identity);
+            assert.equal((await configStore.readRegistrations()).length, 0);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
 });
 
 test('heartbeat does not follow redirects or expose the token in errors', async () => {

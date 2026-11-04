@@ -36,6 +36,32 @@ test('configuration is private, readable by the owner and removable', async () =
     });
 });
 
+test('agent credentials are stored separately with private permissions and selected by company folder', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const companyRoot = path.join(directory, 'company');
+        const nestedProject = path.join(companyRoot, 'repo');
+        await mkdir(nestedProject, { recursive: true });
+        const agentConfiguration = {
+            server_url: 'https://mycompanies.example',
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: false,
+            api_token: 'A'.repeat(80),
+        };
+
+        await store.saveAgent(agentConfiguration);
+
+        assert.deepEqual(await store.loadAgentForDirectory(nestedProject), agentConfiguration);
+        assert.equal((await stat(path.join(store.agentsDirectory, 'agent-12.json'))).mode & 0o777, 0o600);
+        assert.equal((await stat(store.agentsDirectory)).mode & 0o777, 0o700);
+        await store.forgetAgent(nestedProject);
+        await assert.rejects(store.loadAgentForDirectory(nestedProject), /No hay un agente configurado/);
+    });
+});
+
 test('configuration load rejects group-readable files and symbolic links', async () => {
     await withTemporaryConfig(async (store, directory) => {
         await mkdir(path.dirname(store.path), { recursive: true });

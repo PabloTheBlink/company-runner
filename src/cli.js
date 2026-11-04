@@ -3,7 +3,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config.js';
-import { formatAssignee, RunnerClient } from './client.js';
+import { AgentClient, formatAssignee, RunnerClient } from './client.js';
 import { initializeCompanyRoot } from './company-kit.js';
 
 export async function run(argumentsList, streams = process, currentDirectory = process.cwd()) {
@@ -22,6 +22,31 @@ export async function run(argumentsList, streams = process, currentDirectory = p
 
     const configStore = new ConfigStore();
     const client = new RunnerClient(configStore);
+
+    if (command === 'agent') {
+        const [agentCommand, ...agentArguments] = argumentsAfterCommand;
+        const agentClient = new AgentClient(configStore);
+        if (agentCommand === 'login') {
+            const options = parseAgentLoginOptions(agentArguments);
+            streams.stderr.write('Credencial Agent (entrada oculta): ');
+            const apiToken = await readHiddenCode(streams.stdin, streams.stderr);
+            const identity = await agentClient.login(options.server, apiToken, currentDirectory, options.allowInsecureLocalhost);
+            streams.stdout.write(`Agente ${safeTerminalText(identity.agent.name)} · ${safeTerminalText(identity.company.name)}: credencial validada y guardada en configuración privada local.\n`);
+            return 0;
+        }
+        if (agentCommand === 'me' && agentArguments.length === 0) {
+            const identity = await agentClient.identity(currentDirectory);
+            streams.stdout.write(`Agente: ${safeTerminalText(identity.agent.name)} (${safeTerminalText(identity.agent.role)}) · Empresa: ${safeTerminalText(identity.company.name)}\n`);
+            streams.stdout.write(`Permisos vigentes: ${identity.permissions.length === 0 ? 'ninguno' : identity.permissions.map((permission) => `${safeTerminalText(permission.name)} (${permission.scope}${permission.workspace_name ? `: ${safeTerminalText(permission.workspace_name)}` : ''})`).join(', ')}\n`);
+            return 0;
+        }
+        if (agentCommand === 'forget' && agentArguments.length === 0) {
+            await agentClient.forget(currentDirectory);
+            streams.stdout.write('Credencial Agent local eliminada. Revócala también en MyCompanies para invalidarla en el servidor.\n');
+            return 0;
+        }
+        throw new Error('Uso: mycompany agent login|me|forget. Usa mycompany help.');
+    }
 
     if (command === 'enroll') {
         const options = parseEnrollOptions(argumentsAfterCommand);
@@ -126,6 +151,24 @@ export function parseEnrollOptions(argumentsList) {
         throw new Error('Falta el servidor. Usa enroll --server=URL.');
     }
 
+    return options;
+}
+
+export function parseAgentLoginOptions(argumentsList) {
+    const options = { allowInsecureLocalhost: false };
+    for (const argument of argumentsList) {
+        if (argument === '--allow-insecure-localhost') {
+            options.allowInsecureLocalhost = true;
+            continue;
+        }
+        const separator = argument.indexOf('=');
+        if (!argument.startsWith('--') || separator < 3) throw new Error('Usa opciones con formato --nombre=valor.');
+        const name = argument.slice(2, separator);
+        const value = argument.slice(separator + 1);
+        if (!value || name !== 'server') throw new Error('Opción desconocida o vacía. Usa mycompany help.');
+        options.server = value;
+    }
+    if (!options.server) throw new Error('Falta el servidor. Usa agent login --server=URL.');
     return options;
 }
 
@@ -243,6 +286,13 @@ function printHelp(stdout) {
     stdout.write('  mycompany forget\n');
     stdout.write('    Elimina de este usuario la credencial local asociada a la carpeta actual.\n');
     stdout.write('    No revoca el Runner en MyCompanies: revócalo allí por separado si quieres impedir futuras conexiones.\n');
+    stdout.write('  mycompany agent login --server=URL [--allow-insecure-localhost]\n');
+    stdout.write('    Valida una credencial de agente introducida sin mostrarla y la guarda en un almacén local separado del Runner.\n');
+    stdout.write('    El servidor debe usar HTTPS; HTTP solo se permite para pruebas en localhost. La carpeta de empresa actual se asocia a la identidad.\n');
+    stdout.write('  mycompany agent me\n');
+    stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
+    stdout.write('  mycompany agent forget\n');
+    stdout.write('    Elimina la credencial Agent local de esta carpeta. No la revoca en MyCompanies.\n');
     stdout.write('\nAlcance actual: no hay sincronización automática ni comando sync. init solo gestiona archivos locales; heartbeat, work y tasks consultan la API.\n');
     stdout.write('Los Workspaces son ámbitos lógicos del servidor. La raíz local de empresa puede contener varios proyectos y automatizaciones.\n');
 }

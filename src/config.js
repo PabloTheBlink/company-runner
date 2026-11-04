@@ -28,6 +28,7 @@ export class ConfigStore {
 
         this.path = configPath;
         this.registrationsDirectory = path.join(path.dirname(configPath), 'runners');
+        this.agentsDirectory = path.join(path.dirname(configPath), 'agents');
     }
 
     async saveNew(configuration) {
@@ -87,6 +88,120 @@ export class ConfigStore {
     async forget(currentDirectory = process.cwd()) {
         const registration = await this.selectForDirectory(currentDirectory);
         await unlink(registration.filePath);
+    }
+
+    async saveAgent(configuration) {
+        const agents = await this.readAgents();
+        if (agents.some(({ configuration: existing }) => (
+            existing.agent_id === configuration.agent_id
+            || existing.company_root_path === configuration.company_root_path
+        ))) {
+            throw new Error('Ya existe un agente configurado para esta identidad o carpeta. Revoca su credencial anterior antes de iniciar sesión de nuevo.');
+        }
+
+        await this.ensurePrivateDirectory(path.dirname(this.path));
+        await this.ensurePrivateDirectory(this.agentsDirectory);
+        const credentialPath = this.agentPath(configuration.agent_id);
+        let file;
+        try {
+            file = await open(credentialPath, 'wx', 0o600);
+        } catch (error) {
+            if (error.code === 'EEXIST') {
+                throw new Error('Ya existe una credencial local para este agente.');
+            }
+            throw new Error('No se pudo crear el archivo privado de configuración.');
+        }
+
+        try {
+            await file.writeFile(`${JSON.stringify(configuration, null, 2)}\n`, 'utf8');
+            await file.sync();
+        } catch {
+            await file.close();
+            await unlink(credentialPath).catch(() => {});
+            throw new Error('No se pudo guardar la credencial privada del agente.');
+        }
+        await file.close();
+        if (process.platform !== 'win32') await chmod(credentialPath, 0o600);
+    }
+
+    async loadAgentForDirectory(currentDirectory = process.cwd()) {
+        return (await this.selectAgentForDirectory(currentDirectory)).configuration;
+    }
+
+    async forgetAgent(currentDirectory = process.cwd()) {
+        const agent = await this.selectAgentForDirectory(currentDirectory);
+        await unlink(agent.filePath);
+    }
+
+    async selectAgentForDirectory(currentDirectory) {
+        let resolvedDirectory;
+        try {
+            resolvedDirectory = await realpath(currentDirectory);
+        } catch {
+            throw new Error('No se puede determinar la carpeta actual.');
+        }
+
+        const matchingAgents = [];
+        for (const agent of await this.readAgents()) {
+            let companyRootPath;
+            try {
+                companyRootPath = await realpath(agent.configuration.company_root_path);
+            } catch {
+                continue;
+            }
+            if (isWithinDirectory(companyRootPath, resolvedDirectory)) {
+                matchingAgents.push({ ...agent, resolvedCompanyRootPath: companyRootPath });
+            }
+        }
+
+        if (matchingAgents.length === 0) {
+            throw new Error('No hay un agente configurado para esta carpeta. Ejecuta agent login desde la raíz de empresa.');
+        }
+        matchingAgents.sort((first, second) => second.resolvedCompanyRootPath.length - first.resolvedCompanyRootPath.length);
+        if (matchingAgents.length > 1
+            && matchingAgents[0].resolvedCompanyRootPath === matchingAgents[1].resolvedCompanyRootPath) {
+            throw new Error('Hay varios agentes configurados para esta carpeta. Revísalos antes de continuar.');
+        }
+        return matchingAgents[0];
+    }
+
+    async readAgents() {
+        try {
+            const directoryInfo = await lstat(this.agentsDirectory);
+            if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) {
+                throw new Error('La carpeta privada de credenciales Agent no es válida.');
+            }
+            this.assertPrivateMode(directoryInfo, 'La carpeta de credenciales Agent permite acceso a otros usuarios. Protege la carpeta con permisos 0700.');
+            const agents = [];
+            for (const fileName of (await readdir(this.agentsDirectory)).filter((name) => /^agent-\d+\.json$/.test(name))) {
+                const filePath = path.join(this.agentsDirectory, fileName);
+                await this.rejectSymlink(filePath);
+                const fileInfo = await lstat(filePath);
+                if (!fileInfo.isFile()) throw new Error('La configuración Agent local no es un archivo normal.');
+                this.assertPrivateMode(fileInfo, 'La configuración Agent permite acceso a otros usuarios. Protege el archivo con permisos 0600.');
+                let configuration;
+                try {
+                    configuration = JSON.parse(await readFile(filePath, 'utf8'));
+                } catch {
+                    throw new Error('La configuración Agent local no es válida.');
+                }
+                if (typeof configuration.server_url !== 'string'
+                    || !Number.isInteger(configuration.agent_id)
+                    || !Number.isInteger(configuration.company_id)
+                    || typeof configuration.agent_name !== 'string'
+                    || typeof configuration.company_name !== 'string'
+                    || typeof configuration.company_root_path !== 'string'
+                    || typeof configuration.allow_insecure_localhost !== 'boolean'
+                    || typeof configuration.api_token !== 'string') {
+                    throw new Error('La configuración Agent local está incompleta.');
+                }
+                agents.push({ configuration, filePath });
+            }
+            return agents;
+        } catch (error) {
+            if (error.code === 'ENOENT') return [];
+            throw error;
+        }
     }
 
     async selectForDirectory(currentDirectory) {
@@ -231,6 +346,10 @@ export class ConfigStore {
 
     registrationPath(runnerId) {
         return path.join(this.registrationsDirectory, `runner-${runnerId}.json`);
+    }
+
+    agentPath(agentId) {
+        return path.join(this.agentsDirectory, `agent-${agentId}.json`);
     }
 }
 

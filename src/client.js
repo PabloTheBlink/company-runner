@@ -1,6 +1,7 @@
 import { realpath, readdir, stat } from 'node:fs/promises';
 const API_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const ENROLLMENT_CODE_PATTERN = /^[A-Za-z0-9]{64}$/;
+const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 
 export function normalizeServerUrl(serverUrl, allowInsecureLocalhost = false) {
@@ -293,6 +294,104 @@ export class RunnerClient {
             if (body === null || typeof body !== 'object' || Array.isArray(body)) {
                 throw new Error('Invalid response shape.');
             }
+            return { status: response.status, body };
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
+        }
+    }
+}
+
+export class AgentClient {
+    constructor(configStore, fetchImplementation = globalThis.fetch) {
+        this.configStore = configStore;
+        this.fetch = fetchImplementation;
+    }
+
+    async login(serverUrl, apiToken, companyRootPath = process.cwd(), allowInsecureLocalhost = false) {
+        const normalizedServerUrl = normalizeServerUrl(serverUrl, allowInsecureLocalhost);
+        if (typeof apiToken !== 'string' || !AGENT_TOKEN_PATTERN.test(apiToken)) {
+            throw new Error('La credencial Agent no tiene el formato esperado.');
+        }
+        const resolvedCompanyRootPath = await validateCompanyRootPath(companyRootPath);
+        const identity = await this.requestIdentity(normalizedServerUrl, apiToken);
+        await this.configStore.saveAgent({
+            server_url: normalizedServerUrl,
+            agent_id: identity.agent.id,
+            agent_name: identity.agent.name,
+            company_id: identity.company.id,
+            company_name: identity.company.name,
+            company_root_path: resolvedCompanyRootPath,
+            allow_insecure_localhost: allowInsecureLocalhost,
+            api_token: apiToken,
+        });
+        return identity;
+    }
+
+    async identity(currentDirectory = process.cwd()) {
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const identity = await this.requestIdentity(serverUrl, configuration.api_token);
+        if (identity.agent.id !== configuration.agent_id || identity.company.id !== configuration.company_id) {
+            throw new Error('La identidad Agent del servidor no coincide con la configuración local.');
+        }
+        return identity;
+    }
+
+    async forget(currentDirectory = process.cwd()) {
+        await this.configStore.forgetAgent(currentDirectory);
+    }
+
+    async requestIdentity(serverUrl, apiToken) {
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/me`, apiToken);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        const { agent, company, permissions } = response.body;
+        if (response.status !== 200
+            || agent === null || typeof agent !== 'object'
+            || !Number.isInteger(agent.id) || agent.id < 1
+            || typeof agent.uuid !== 'string'
+            || typeof agent.name !== 'string'
+            || typeof agent.role !== 'string'
+            || company === null || typeof company !== 'object'
+            || !Number.isInteger(company.id) || company.id < 1
+            || typeof company.name !== 'string'
+            || !Array.isArray(permissions)
+            || permissions.some((permission) => permission === null
+                || typeof permission !== 'object'
+                || typeof permission.name !== 'string'
+                || !['company', 'workspace'].includes(permission.scope)
+                || (permission.workspace_id !== null && !Number.isInteger(permission.workspace_id))
+                || (permission.workspace_name !== null && typeof permission.workspace_name !== 'string'))) {
+            throw new Error('MyCompanies devolvió una identidad Agent no válida.');
+        }
+        return response.body;
+    }
+
+    async getJson(endpoint, apiToken) {
+        let response;
+        try {
+            response = await this.fetch(endpoint, {
+                method: 'GET',
+                headers: { Accept: 'application/json', Authorization: `Bearer ${apiToken}` },
+                redirect: 'manual',
+                signal: AbortSignal.timeout(10_000),
+            });
+        } catch {
+            throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
+        }
+        if (response.status !== 200 && response.status !== 401) {
+            throw new Error(`MyCompanies no pudo validar la identidad Agent (HTTP ${response.status}).`);
+        }
+        let responseText;
+        try {
+            responseText = await readResponseLimited(response, MAX_RESPONSE_BYTES);
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta demasiado grande o no válida.');
+        }
+        try {
+            const body = JSON.parse(responseText);
+            if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid response shape.');
             return { status: response.status, body };
         } catch {
             throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
