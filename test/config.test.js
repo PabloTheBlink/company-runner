@@ -185,3 +185,25 @@ test('ambiguous same-folder Agent profiles require an explicit selected identity
         await assert.rejects(store.loadAgentForDirectory(companyRoot), /Hay varios agentes configurados/);
     });
 });
+
+test('local Agent identities can be listed without returning credentials', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const createConfiguration = (agentId, agentName) => ({
+            server_url: 'https://mycompanies.example', agent_id: agentId, agent_name: agentName,
+            company_id: 4, company_name: 'Devetty', company_root_path: companyRoot,
+            allow_insecure_localhost: false, api_token: `${agentId}`.repeat(80),
+        });
+        await store.saveAgent(createConfiguration(1, 'CEO'));
+        await store.saveAgent(createConfiguration(12, 'Marketing'));
+
+        const identities = await store.listAgentIdentitiesForDirectory(companyRoot, '12');
+
+        assert.deepEqual(identities.map(({ id, name, isDefault, isSelected }) => ({ id, name, isDefault, isSelected })), [
+            { id: 1, name: 'CEO', isDefault: true, isSelected: false },
+            { id: 12, name: 'Marketing', isDefault: false, isSelected: true },
+        ]);
+        assert.equal(JSON.stringify(identities).includes('api_token'), false);
+    });
+});

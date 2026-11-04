@@ -142,6 +142,29 @@ export class ConfigStore {
         return configuration;
     }
 
+    async listAgentIdentitiesForDirectory(currentDirectory = process.cwd(), selectedAgentId = process.env.MYCOMPANY_AGENT_ID) {
+        const selectedAgent = await this.selectAgentForDirectory(currentDirectory, selectedAgentId);
+        const defaultAgent = await this.selectAgentForDirectory(currentDirectory, null);
+        const identities = [];
+        for (const { configuration, filePath } of await this.readAgents()) {
+            let companyRootPath;
+            try {
+                companyRootPath = await realpath(configuration.company_root_path);
+            } catch {
+                continue;
+            }
+            if (companyRootPath !== selectedAgent.resolvedCompanyRootPath) continue;
+            identities.push({
+                id: configuration.agent_id,
+                name: configuration.agent_name,
+                isDefault: configuration.agent_id === defaultAgent.configuration.agent_id,
+                isSelected: configuration.agent_id === selectedAgent.configuration.agent_id,
+                filePath,
+            });
+        }
+        return identities.sort((first, second) => first.id - second.id).map(({ filePath: _filePath, ...identity }) => identity);
+    }
+
     async forgetAgent(currentDirectory = process.cwd()) {
         const agent = await this.selectAgentForDirectory(currentDirectory);
         await unlink(agent.filePath);
@@ -174,7 +197,7 @@ export class ConfigStore {
         matchingAgents.sort((first, second) => second.resolvedCompanyRootPath.length - first.resolvedCompanyRootPath.length);
         const mostSpecificRoot = matchingAgents[0].resolvedCompanyRootPath;
         const sameRootAgents = matchingAgents.filter((agent) => agent.resolvedCompanyRootPath === mostSpecificRoot);
-        if (selectedAgentId !== undefined && selectedAgentId !== '') {
+        if (selectedAgentId !== undefined && selectedAgentId !== null && selectedAgentId !== '') {
             if (!/^\d+$/.test(String(selectedAgentId)) || Number(selectedAgentId) < 1) {
                 throw new Error('MYCOMPANY_AGENT_ID debe ser un ID de agente positivo.');
             }

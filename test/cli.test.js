@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
+import { ConfigStore } from '../src/config.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
     assert.equal(formatAssignee(null), 'sin asignar');
@@ -280,6 +281,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany tasks/);
     assert.match(output.value, /mycompany task ID/);
     assert.match(output.value, /mycompany agent login/);
+    assert.match(output.value, /mycompany agent identities/);
     assert.match(output.value, /mycompany agent me/);
     assert.match(output.value, /mycompany agent tasks/);
     assert.match(output.value, /mycompany agent bets/);
@@ -316,6 +318,41 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /No reclama, modifica, marca como terminadas ni ejecuta/);
     assert.match(output.value, /No revoca el Runner en MyCompanies/);
     assert.doesNotMatch(output.value, /company-runner/);
+});
+
+test('agent identities shows only local profiles and never prints tokens', async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-identities-test-'));
+    const companyRoot = path.join(directory, 'company');
+    const configHome = path.join(directory, 'config');
+    const previousConfigHome = process.env.XDG_CONFIG_HOME;
+    const previousAgentId = process.env.MYCOMPANY_AGENT_ID;
+    await mkdir(companyRoot, { recursive: true });
+    const configStore = new ConfigStore(path.join(configHome, 'mycompanies', 'runner.json'));
+    const createConfiguration = (agentId, agentName) => ({
+        server_url: 'https://mycompanies.example', agent_id: agentId, agent_name: agentName,
+        company_id: 4, company_name: 'Devetty', company_root_path: companyRoot,
+        allow_insecure_localhost: false, api_token: String(agentId).repeat(80),
+    });
+    await configStore.saveAgent(createConfiguration(1, 'CEO'));
+    await configStore.saveAgent(createConfiguration(12, 'Marketing'));
+    process.env.XDG_CONFIG_HOME = configHome;
+    process.env.MYCOMPANY_AGENT_ID = '12';
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+    const stderr = { value: '', write(chunk) { this.value += chunk; } };
+
+    try {
+        assert.equal(await run(['agent', 'identities'], { stdout, stderr }, companyRoot), 0);
+        assert.match(stdout.value, /#1 CEO · predeterminado/);
+        assert.match(stdout.value, /#12 Marketing · seleccionado/);
+        assert.doesNotMatch(stdout.value, /api_token|111111|121212/);
+        assert.equal(stderr.value, '');
+    } finally {
+        if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previousConfigHome;
+        if (previousAgentId === undefined) delete process.env.MYCOMPANY_AGENT_ID;
+        else process.env.MYCOMPANY_AGENT_ID = previousAgentId;
+        await rm(directory, { recursive: true, force: true });
+    }
 });
 
 test('init prepares the selected company root without Runner enrollment', async () => {

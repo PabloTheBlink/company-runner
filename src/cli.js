@@ -82,6 +82,19 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`Agente ${safeTerminalText(identity.agent.name)} · ${safeTerminalText(identity.company.name)}: credencial validada y guardada en configuración privada local.\n`);
             return 0;
         }
+        if (agentCommand === 'identities' && agentArguments.length === 0) {
+            const identities = await configStore.listAgentIdentitiesForDirectory(currentDirectory);
+            streams.stdout.write(`Identidades Agent guardadas localmente (${identities.length}):\n`);
+            for (const identity of identities) {
+                const labels = [
+                    ...(identity.isDefault ? ['predeterminado'] : []),
+                    ...(identity.isSelected ? ['seleccionado'] : []),
+                ];
+                streams.stdout.write(`#${identity.id} ${safeTerminalText(identity.name)}${labels.length === 0 ? '' : ` · ${labels.join(', ')}`}\n`);
+            }
+            streams.stdout.write('Solo lee la configuración local; no conecta con MyCompanies ni muestra credenciales.\n');
+            return 0;
+        }
         if (agentCommand === 'me' && agentArguments.length === 0) {
             const identity = await agentClient.identity(currentDirectory);
             const role = identity.agent.role === null ? 'sin rol' : safeTerminalText(identity.agent.role);
@@ -1042,6 +1055,8 @@ function printHelp(stdout) {
     stdout.write('  mycompany agent login --server=URL [--allow-insecure-localhost]\n');
     stdout.write('    Valida una credencial de agente introducida sin mostrarla y la guarda en un almacén local separado del Runner.\n');
     stdout.write('    El servidor debe usar HTTPS; HTTP solo se permite para pruebas en localhost. La carpeta de empresa actual se asocia a la identidad.\n');
+    stdout.write('  mycompany agent identities\n');
+    stdout.write('    Lista las identidades guardadas para esta carpeta, marca la predeterminada y la seleccionada, sin conectar ni mostrar secretos.\n');
     stdout.write('  mycompany agent me\n');
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
     stdout.write('  mycompany agent permissions\n');
