@@ -400,6 +400,63 @@ export class AgentClient {
         return response.body.task;
     }
 
+    async listOffers(currentDirectory = process.cwd(), afterId = null) {
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de ofertas debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/offers${cursor}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene offers.read o offers.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.offers)
+            || response.body.offers.length > 100
+            || typeof response.body.has_more !== 'boolean'
+            || response.body.offers.some((offer) => !isAgentOfferSummary(offer))
+            || (response.body.has_more
+                ? !Number.isInteger(response.body.next_after)
+                    || response.body.next_after < 1
+                    || response.body.offers.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
+            throw new Error('MyCompanies devolvió una lista de ofertas Agent no válida.');
+        }
+        return response.body;
+    }
+
+    async getOffer(offerId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(offerId) || offerId < 1) {
+            throw new Error('El ID de oferta debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/offers/${offerId}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene offers.read o offers.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La oferta no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || !isAgentOffer(response.body.offer)) {
+            throw new Error('MyCompanies devolvió un detalle de oferta Agent no válido.');
+        }
+        return response.body.offer;
+    }
+
     async listBets(currentDirectory = process.cwd(), afterId = null) {
         if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
             throw new Error('El cursor de apuestas debe ser un entero positivo.');
@@ -915,6 +972,22 @@ function isAgentTask(task, includeDescription = false) {
                 && Number.isInteger(task.workspace.id)
                 && task.workspace.id > 0
                 && typeof task.workspace.name === 'string'));
+}
+
+function isAgentOfferSummary(offer) {
+    return offer !== null
+        && typeof offer === 'object'
+        && Number.isInteger(offer.id)
+        && offer.id > 0
+        && typeof offer.name === 'string'
+        && ['product', 'service'].includes(offer.type)
+        && ['preparing', 'available', 'withdrawn'].includes(offer.status)
+        && (offer.bet_id === null || Number.isInteger(offer.bet_id));
+}
+
+function isAgentOffer(offer) {
+    return isAgentOfferSummary(offer)
+        && (offer.description === null || typeof offer.description === 'string');
 }
 
 function isAgentBetSummary(bet) {

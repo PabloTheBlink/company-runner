@@ -283,6 +283,60 @@ test('agent bet list and detail use Agent auth and validate returned evidence', 
     });
 });
 
+test('agent offer list and detail use the company-scoped read API', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (request.url === '/api/v1/agent/offers?after_id=25') {
+                response.end(JSON.stringify({
+                    offers: [{ id: 26, name: 'Informe mensual', type: 'service', status: 'preparing', bet_id: 7 }],
+                    has_more: false,
+                    next_after: null,
+                }));
+                return;
+            }
+            assert.equal(request.url, '/api/v1/agent/offers/26');
+            response.end(JSON.stringify({
+                offer: {
+                    id: 26,
+                    name: 'Informe mensual',
+                    type: 'service',
+                    description: 'Informe sobre el mercado.',
+                    status: 'preparing',
+                    bet_id: 7,
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const list = await client.listOffers(companyRoot, 25);
+            assert.equal(list.offers[0].bet_id, 7);
+            const detail = await client.getOffer(26, companyRoot);
+            assert.equal(detail.description, 'Informe sobre el mercado.');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent can post evidence to its bet endpoint and receives the recorded actor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');

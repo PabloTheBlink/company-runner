@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentLoginOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOffersOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -54,6 +54,15 @@ test('agent bet listing accepts a single positive cursor', () => {
     assert.deepEqual(parseAgentBetsOptions(['--after=25']), { afterId: 25 });
     assert.throws(() => parseAgentBetsOptions(['--after=0']), /entero positivo/);
     assert.throws(() => parseAgentBetsOptions(['--other']), /Opción desconocida/);
+});
+
+test('agent offer listing accepts a single positive cursor and detail ID', () => {
+    assert.deepEqual(parseAgentOffersOptions([]), { afterId: null });
+    assert.deepEqual(parseAgentOffersOptions(['--after=25']), { afterId: 25 });
+    assert.throws(() => parseAgentOffersOptions(['--after=0']), /entero positivo/);
+    assert.throws(() => parseAgentOffersOptions(['--other']), /Opción desconocida/);
+    assert.equal(parseAgentOfferId(['25']), 25);
+    assert.throws(() => parseAgentOfferId(['0']), /entero positivo/);
 });
 
 test('agent bet evidence command requires valid evidence fields and an HTTP source URL', () => {
@@ -158,6 +167,8 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent bet evidence ID/);
     assert.match(output.value, /mycompany agent bet status ID ESTADO/);
     assert.match(output.value, /mycompany agent bet convert ID --type=product\|service/);
+    assert.match(output.value, /mycompany agent offers/);
+    assert.match(output.value, /mycompany agent offer ID/);
     assert.match(output.value, /mycompany agent task ID/);
     assert.match(output.value, /mycompany agent task status ID ESTADO/);
     assert.match(output.value, /mycompany agent task create/);

@@ -77,6 +77,38 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'offers') {
+            const options = parseAgentOffersOptions(agentArguments);
+            const result = await agentClient.listOffers(currentDirectory, options.afterId);
+            if (result.offers.length === 0) {
+                streams.stdout.write('No hay ofertas registradas para esta empresa.\n');
+                return 0;
+            }
+            streams.stdout.write(`Ofertas de la empresa (${result.offers.length}):\n`);
+            for (const offer of result.offers) {
+                const type = offer.type === 'product' ? 'producto' : 'servicio';
+                const status = { preparing: 'en preparación', available: 'disponible', withdrawn: 'retirada' }[offer.status];
+                streams.stdout.write(`#${offer.id} [${type} · ${status}] ${safeTerminalText(offer.name)}${offer.bet_id === null ? '' : ` · apuesta #${offer.bet_id}`}\n`);
+            }
+            if (result.has_more) {
+                streams.stdout.write(`Hay más ofertas. Continúa con: mycompany agent offers --after=${result.next_after}\n`);
+            }
+            return 0;
+        }
+        if (agentCommand === 'offer') {
+            const offerId = parseAgentOfferId(agentArguments);
+            const offer = await agentClient.getOffer(offerId, currentDirectory);
+            const type = offer.type === 'product' ? 'Producto' : 'Servicio';
+            const status = { preparing: 'En preparación', available: 'Disponible', withdrawn: 'Retirada' }[offer.status];
+            streams.stdout.write(`#${offer.id} · ${safeTerminalText(offer.name)}\nTipo: ${type}\nEstado: ${status}\n`);
+            if (offer.description !== null && offer.description !== '') {
+                streams.stdout.write(`Descripción: ${safeTerminalText(offer.description)}\n`);
+            }
+            if (offer.bet_id !== null) {
+                streams.stdout.write(`Apuesta de origen: #${offer.bet_id}\n`);
+            }
+            return 0;
+        }
         if (agentCommand === 'bet' && agentArguments[0] === 'evidence') {
             const options = parseAgentBetEvidenceOptions(agentArguments.slice(1));
             const evidence = await agentClient.addBetEvidence(options.betId, options.evidence, currentDirectory);
@@ -306,6 +338,19 @@ export function parseAgentBetsOptions(argumentsList) {
     const match = /^--after=(.+)$/.exec(argumentsList[0]);
     if (match === null) throw new Error('Opción desconocida para agent bets. Usa --after=ID.');
     return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentOffersOptions(argumentsList) {
+    if (argumentsList.length === 0) return { afterId: null };
+    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent offers. Usa --after=ID.');
+    const match = /^--after=(.+)$/.exec(argumentsList[0]);
+    if (match === null) throw new Error('Opción desconocida para agent offers. Usa --after=ID.');
+    return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentOfferId(argumentsList) {
+    if (argumentsList.length !== 1) throw new Error('Uso: mycompany agent offer ID.');
+    return parseTaskId(argumentsList[0]);
 }
 
 export function parseAgentBetEvidenceOptions(argumentsList) {
@@ -567,6 +612,10 @@ function printHelp(stdout) {
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');
     stdout.write('    Lista apuestas de la empresa con bets.read o bets.manage. Solo muestra título y estado.\n');
+    stdout.write('  mycompany agent offers [--after=ID]\n');
+    stdout.write('    Lista ofertas de la empresa con offers.read o offers.manage.\n');
+    stdout.write('  mycompany agent offer ID\n');
+    stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
     stdout.write('  mycompany agent bet ID\n');
     stdout.write('    Muestra hipótesis, descripción y evidencias de una apuesta permitida, como texto sin ejecutarlas.\n');
     stdout.write('  mycompany agent bet evidence ID --title=TEXTO --details=TEXTO --assessment=supports|challenges|neutral [--source-url=URL]\n');
