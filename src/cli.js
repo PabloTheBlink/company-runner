@@ -4,11 +4,19 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config.js';
 import { RunnerClient } from './client.js';
+import { initializeWorkspace } from './workspace-kit.js';
 
-export async function run(argumentsList, streams = process) {
+export async function run(argumentsList, streams = process, currentDirectory = process.cwd()) {
     const [command = 'help', ...argumentsAfterCommand] = argumentsList;
     if (['help', '--help', '-h'].includes(command)) {
         printHelp(streams.stdout);
+        return 0;
+    }
+
+    if (command === 'init') {
+        if (argumentsAfterCommand.length !== 0) throw new Error('init no admite opciones.');
+        const result = await initializeWorkspace(currentDirectory);
+        streams.stdout.write(`Workspace preparado · ${result.created.length} archivos creados · ${result.updated.length} instrucciones actualizadas · ${result.unchanged.length} sin cambios.\n`);
         return 0;
     }
 
@@ -210,6 +218,7 @@ export function readHiddenCode(stdin, stderr) {
 function printHelp(stdout) {
     stdout.write('MyCompany · Runner CLI\n');
     stdout.write('Ejecuta estos comandos desde la carpeta del workspace correspondiente.\n');
+    stdout.write('  mycompany init\n');
     stdout.write('  mycompany enroll --server=URL [--allow-insecure-localhost]\n');
     stdout.write('  mycompany heartbeat\n');
     stdout.write('  mycompany work\n');

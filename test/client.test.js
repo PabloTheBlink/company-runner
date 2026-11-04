@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
@@ -9,7 +8,7 @@ import { RunnerClient, normalizeServerUrl } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 
 async function withTemporaryDirectory(runTest) {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'mycompanies-runner-test-'));
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompanies-runner-test-'));
 
     try {
         await runTest(directory);

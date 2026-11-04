@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { ConfigStore } from '../src/config.js';
 
 async function withTemporaryConfig(runTest) {
-    const directory = await mkdtemp(path.join(os.tmpdir(), 'mycompanies-runner-test-'));
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompanies-runner-test-'));
     const store = new ConfigStore(path.join(directory, 'private', 'runner.json'));
 
     try {

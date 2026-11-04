@@ -28,8 +28,13 @@ Each local workspace folder is enrolled separately. Run `enroll` from that folde
 
 ```sh
 cd /path/to/company/workspace
+mycompany init
 mycompany enroll --server=https://YOUR-MYCOMPANIES-HOST
 ```
+
+`mycompany init` is a local-only, repeatable setup command. It creates `AGENTS.md` for Codex, `CLAUDE.md` for Claude Code, and lightweight `tasks/`, `automations/`, and `.mycompanies/` folders. It adds or refreshes only a clearly marked MyCompanies instruction block, preserves instructions outside that block, and leaves existing scaffold files untouched. It refuses symbolic-link targets. It makes no API calls and does not inspect environment files.
+
+The generated guidance keeps personal work, AI-assisted work with optional subagents, and recurring local scripts distinct. It also describes persistent company agents as members with their own identity, flexible role, personality/instructions, skills, and scoped permissions. A coordinating agent may advance business work within those granted permissions; permissions are explicit and are not inferred from an agent's prompt. Subagents remain attributable delegations under a parent agent, not members by default. Scripts may stay where they already live. A future scheduler can refer to a named local capability; MyCompanies must never send arbitrary commands, source code, or local secret values to a Runner. `init` documents this structure but does not configure schedules or run scripts.
 
 Enter the one-time code from the MyCompanies Runners page when prompted. The prompt hides the code. The current folder is checked locally and is never sent to the server. For local development only, HTTP is allowed for `localhost`, `127.0.0.1`, or `::1` with `--allow-insecure-localhost`; network hosts require HTTPS.
 

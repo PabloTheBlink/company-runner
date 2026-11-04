@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
@@ -30,10 +30,29 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.deepEqual(packageConfiguration.bin, { mycompany: './src/cli.js' });
     assert.equal(await run(['help'], { stdout: output }), 0);
     assert.match(output.value, /mycompany heartbeat/);
+    assert.match(output.value, /mycompany init/);
     assert.match(output.value, /mycompany work/);
     assert.match(output.value, /mycompany tasks/);
     assert.match(output.value, /mycompany task ID/);
     assert.doesNotMatch(output.value, /company-runner/);
+});
+
+test('init prepares the selected local workspace without Runner enrollment', async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-cli-test-'));
+    try {
+        const output = { value: '', write(chunk) { this.value += chunk; } };
+        assert.equal(await run(['init'], { stdout: output }, directory), 0);
+        assert.match(output.value, /5 archivos creados/);
+        assert.equal((await stat(path.join(directory, 'AGENTS.md'))).isFile(), true);
+        assert.equal((await stat(path.join(directory, 'CLAUDE.md'))).isFile(), true);
+
+        output.value = '';
+        await run(['init'], { stdout: output }, directory);
+        assert.match(output.value, /0 archivos creados/);
+        assert.match(output.value, /sin cambios/);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
 });
 
 test('task detail accepts only a positive numeric task ID', () => {
