@@ -476,6 +476,9 @@ export class AgentClient {
         if (response.status === 404) {
             throw new Error('La apuesta no existe o no pertenece a la empresa de este agente.');
         }
+        if (response.status === 409) {
+            throw new Error('La apuesta ya está convertida y no puede volver a cambiar de estado.');
+        }
         if (response.status === 422) {
             throw new Error('MyCompanies rechazó la evidencia. Revisa el título, los detalles, la valoración y la fuente (HTTP 422).');
         }
@@ -486,6 +489,53 @@ export class AgentClient {
             throw new Error('MyCompanies devolvió una respuesta de evidencia Agent no válida.');
         }
         return response.body.evidence;
+    }
+
+    async updateBetStatus(betId, status, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(betId) || betId < 1) {
+            throw new Error('El ID de apuesta debe ser un entero positivo.');
+        }
+        if (!['proposed', 'investigating', 'validated', 'discarded', 'archived'].includes(status)) {
+            throw new Error('El estado de apuesta no es válido. La conversión se realiza con una operación separada.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.patchJson(
+            `${serverUrl}/api/v1/agent/bets/${betId}/status`,
+            { status },
+            configuration.api_token,
+        );
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita bets.status.manage para cambiar el estado (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La apuesta no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 409) {
+            throw new Error('La apuesta ya está convertida y no puede volver a cambiar de estado.');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó el estado solicitado (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        const bet = response.body.bet;
+        if (response.status !== 200
+            || bet?.id !== betId
+            || bet.status !== status
+            || typeof bet.changed !== 'boolean'
+            || (bet.changed
+                ? bet.changed_by?.type !== 'agent'
+                    || !Number.isInteger(bet.changed_by.id)
+                    || typeof bet.changed_by.name !== 'string'
+                : bet.changed_by !== null)) {
+            throw new Error('MyCompanies devolvió una respuesta de cambio de estado de apuesta no válida.');
+        }
+        return bet;
     }
 
     async editTask(taskId, changes, currentDirectory = process.cwd()) {
@@ -696,7 +746,7 @@ export class AgentClient {
         } catch {
             throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
         }
-        if (![200, 401, 403, 404, 422, 429].includes(response.status)) {
+        if (![200, 401, 403, 404, 409, 422, 429].includes(response.status)) {
             throw new Error(`MyCompanies devolvió un error HTTP ${response.status}.`);
         }
         if (response.status !== 200) return { status: response.status, body: {} };

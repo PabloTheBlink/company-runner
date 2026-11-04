@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssignmentOptions, parseAgentBetEvidenceOptions, parseAgentBetsOptions, parseAgentLoginOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssignmentOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentLoginOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -81,6 +81,13 @@ test('agent bet evidence command requires valid evidence fields and an HTTP sour
     ]), /HTTP o HTTPS/);
 });
 
+test('agent bet status command accepts only transitions outside automatic conversion', () => {
+    assert.deepEqual(parseAgentBetStatusOptions(['25', 'investigating']), { betId: 25, status: 'investigating' });
+    assert.deepEqual(parseAgentBetStatusOptions(['25', 'validated']), { betId: 25, status: 'validated' });
+    assert.throws(() => parseAgentBetStatusOptions(['25', 'converted']), /estado no es válido/);
+    assert.throws(() => parseAgentBetStatusOptions(['0', 'validated']), /entero positivo/);
+});
+
 test('agent status command requires a task ID and supported target status', () => {
     assert.deepEqual(parseAgentStatusOptions(['26', 'in_progress']), { taskId: 26, status: 'in_progress' });
     assert.deepEqual(parseAgentStatusOptions(['26', 'completed']), { taskId: 26, status: 'completed' });
@@ -142,6 +149,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent bets/);
     assert.match(output.value, /mycompany agent bet ID/);
     assert.match(output.value, /mycompany agent bet evidence ID/);
+    assert.match(output.value, /mycompany agent bet status ID ESTADO/);
     assert.match(output.value, /mycompany agent task ID/);
     assert.match(output.value, /mycompany agent task status ID ESTADO/);
     assert.match(output.value, /mycompany agent task create/);

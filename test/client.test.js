@@ -336,6 +336,85 @@ test('agent can post evidence to its bet endpoint and receives the recorded acto
     });
 });
 
+test('agent bet status update uses the separate endpoint and validates the recorded actor', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'PATCH');
+            assert.equal(request.url, '/api/v1/agent/bets/42/status');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            assert.deepEqual(JSON.parse(body), { status: 'investigating' });
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                bet: {
+                    id: 42,
+                    status: 'investigating',
+                    changed: true,
+                    changed_by: { type: 'agent', id: 12, name: 'Revisor' },
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Revisor',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const result = await new AgentClient(configStore).updateBetStatus(42, 'investigating', companyRoot);
+            assert.equal(result.changed_by.name, 'Revisor');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('agent bet status update reports that converted bets are locked', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            response.writeHead(409, { 'content-type': 'application/json' });
+            response.end('{}');
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Revisor',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            await assert.rejects(
+                new AgentClient(configStore).updateBetStatus(42, 'archived', companyRoot),
+                /convertida/,
+            );
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent status update sends the explicit status to the scoped Agent endpoint', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');

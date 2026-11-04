@@ -84,6 +84,15 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write(`Evidencia #${evidence.id} registrada en la apuesta #${options.betId} [${assessment}] por ${safeTerminalText(evidence.recorded_by.name)}.\n`);
             return 0;
         }
+        if (agentCommand === 'bet' && agentArguments[0] === 'status') {
+            const options = parseAgentBetStatusOptions(agentArguments.slice(1));
+            const result = await agentClient.updateBetStatus(options.betId, options.status, currentDirectory);
+            const status = { proposed: 'propuesta', investigating: 'investigando', validated: 'validada', discarded: 'descartada', archived: 'archivada' }[result.status];
+            streams.stdout.write(result.changed
+                ? `Apuesta #${result.id}: estado actualizado a ${status} por ${safeTerminalText(result.changed_by.name)}.\n`
+                : `Apuesta #${result.id}: ya estaba en estado ${status}; no se añadió historial.\n`);
+            return 0;
+        }
         if (agentCommand === 'bet' && agentArguments.length === 1) {
             const bet = await agentClient.getBet(parseTaskId(agentArguments[0]), currentDirectory);
             const status = { proposed: 'propuesta', investigating: 'investigando', validated: 'validada', discarded: 'descartada', converted: 'convertida', archived: 'archivada' }[bet.status];
@@ -330,6 +339,16 @@ export function parseAgentBetEvidenceOptions(argumentsList) {
     return { betId, evidence: options };
 }
 
+export function parseAgentBetStatusOptions(argumentsList) {
+    if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent bet status ID ESTADO.');
+    const [betId, status] = argumentsList;
+    if (!['proposed', 'investigating', 'validated', 'discarded', 'archived'].includes(status)) {
+        throw new Error('El estado no es válido; converted requiere una operación separada.');
+    }
+
+    return { betId: parseTaskId(betId), status };
+}
+
 export function parseAgentStatusOptions(argumentsList) {
     if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent task status ID ESTADO.');
     const [taskId, status] = argumentsList;
@@ -535,6 +554,8 @@ function printHelp(stdout) {
     stdout.write('    Muestra hipótesis, descripción y evidencias de una apuesta permitida, como texto sin ejecutarlas.\n');
     stdout.write('  mycompany agent bet evidence ID --title=TEXTO --details=TEXTO --assessment=supports|challenges|neutral [--source-url=URL]\n');
     stdout.write('    Registra una observación en la apuesta con bets.manage y conserva el agente que la aportó. No cambia el estado de la apuesta.\n');
+    stdout.write('  mycompany agent bet status ID ESTADO\n');
+    stdout.write('    Cambia el estado con bets.status.manage y registra el agente en el historial. La conversión en oferta es una operación separada.\n');
     stdout.write('  mycompany agent task ID\n');
     stdout.write('    Consulta una tarea activa dentro del ámbito Agent y muestra descripción y detalles como texto. No interpreta instrucciones.\n');
     stdout.write('  mycompany agent task status ID ESTADO\n');
