@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 import { realpathSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config.js';
 import { AgentClient, formatAssignee, RunnerClient } from './client.js';
 import { listLocalCapabilities } from './capabilities/devto-stats-totals.js';
 import { initializeCompanyRoot } from './company-kit.js';
-import { createAgentRuntimePlan, listLocalAgentRuntimes } from './runtime.js';
+import { createAgentRuntimePlan, listLocalAgentRuntimes, normalizeLocalAgentPath } from './runtime.js';
 
 export async function run(
     argumentsList,
@@ -14,6 +15,7 @@ export async function run(
     currentDirectory = process.cwd(),
     configStore = new ConfigStore(),
     runtimeDetector = listLocalAgentRuntimes,
+    localFileAccessConfirmer = confirmLocalAgentFileAccess,
 ) {
     const [command = 'help', ...argumentsAfterCommand] = argumentsList;
     if (['help', '--help', '-h'].includes(command)) {
@@ -98,6 +100,49 @@ export async function run(
         const [agentCommand, ...agentArguments] = argumentsAfterCommand;
         const agentClient = new AgentClient(configStore);
         if (agentCommand === 'runtime') {
+            if (agentArguments[0] === 'files') {
+                const options = parseAgentRuntimeFileAccessOptions(agentArguments.slice(1));
+                const agentConfiguration = await configStore.loadAgentForDirectory(currentDirectory);
+                if (options.action === 'list') {
+                    const grants = await configStore.listAgentFileAccessForDirectory(currentDirectory, agentConfiguration.agent_id);
+                    streams.stdout.write(`Permisos locales de archivos para Agent ${safeTerminalText(agentConfiguration.agent_name)} (#${agentConfiguration.agent_id}) en ${safeTerminalText(agentConfiguration.company_name)}:\n`);
+                    if (grants.length === 0) {
+                        streams.stdout.write('No hay rutas concedidas.\n');
+                        return 0;
+                    }
+                    for (const grant of grants) {
+                        streams.stdout.write(`  ${grant.operations.join(', ')} · ${safeTerminalText(grant.path)}\n`);
+                    }
+                    streams.stdout.write('La lista es local a este PC; no se sube a MyCompanies.\n');
+                    return 0;
+                }
+
+                const confirmed = await localFileAccessConfirmer({
+                    action: options.action,
+                    agentId: agentConfiguration.agent_id,
+                    agentName: agentConfiguration.agent_name,
+                    companyName: agentConfiguration.company_name,
+                    operation: options.operation,
+                    path: options.path,
+                }, streams);
+                if (!confirmed) throw new Error('No se guardó el cambio porque faltó la confirmación escrita.');
+
+                const changeMethod = options.action === 'grant'
+                    ? 'grantAgentFileAccessForDirectory'
+                    : 'revokeAgentFileAccessForDirectory';
+                const result = await configStore[changeMethod](
+                    currentDirectory,
+                    options.path,
+                    options.operation,
+                    agentConfiguration.agent_id,
+                );
+                const statusLabel = result.changed
+                    ? options.action === 'grant' ? 'concedido' : 'revocado'
+                    : 'sin cambios';
+                streams.stdout.write(`Permiso local ${statusLabel}: Agent #${agentConfiguration.agent_id} · ${options.operation} · ${safeTerminalText(options.path)}.\n`);
+                streams.stdout.write('Este permiso solo se aplica en este PC y no modifica grants de MyCompanies.\n');
+                return 0;
+            }
             if (agentArguments[0] === 'plan') {
                 const options = parseAgentRuntimePlanOptions(agentArguments.slice(1));
                 const installedRuntimes = await runtimeDetector();
@@ -117,7 +162,7 @@ export async function run(
                 streams.stdout.write('No se ha iniciado un modelo ni se han comprobado permisos locales de archivos, terminal o red.\n');
                 return 0;
             }
-            if (agentArguments.length !== 0) throw new Error('Uso: mycompany agent runtime | mycompany agent runtime plan TASK_ID --provider=codex|claude.');
+            if (agentArguments.length !== 0) throw new Error('Uso: mycompany agent runtime | plan TASK_ID --provider=codex|claude | files list|grant|revoke.');
             const runtimes = await runtimeDetector();
             if (runtimes.length === 0) {
                 streams.stdout.write('No se encontró Codex ni Claude Code en PATH.\n');
@@ -655,6 +700,40 @@ export function parseAgentRuntimePlanOptions(argumentsList) {
     }
 
     return { taskId: parseTaskId(argumentsList[0]), provider };
+}
+
+export function parseAgentRuntimeFileAccessOptions(argumentsList) {
+    const usage = 'Uso: mycompany agent runtime files list | grant RUTA --operation=read|write | revoke RUTA --operation=read|write.';
+    const [action, ...argumentsAfterAction] = argumentsList;
+    if (action === 'list' && argumentsAfterAction.length === 0) return { action };
+    if (!['grant', 'revoke'].includes(action) || argumentsAfterAction.length !== 2) {
+        throw new Error(usage);
+    }
+
+    const [pathValue, operationOption] = argumentsAfterAction;
+    const relativePath = normalizeLocalAgentPath(pathValue);
+    if (relativePath === null) throw new Error('Indica una ruta segura relativa a la carpeta de empresa.');
+    const operationMatch = /^--operation=(read|write)$/.exec(operationOption);
+    if (operationMatch === null) throw new Error('La operación debe ser read o write.');
+
+    return { action, path: relativePath, operation: operationMatch[1] };
+}
+
+async function confirmLocalAgentFileAccess(request, streams) {
+    if (streams.stdin?.isTTY !== true || streams.stderr?.isTTY !== true) {
+        throw new Error('Conceder o revocar acceso local requiere un terminal interactivo.');
+    }
+
+    const verb = request.action === 'grant' ? 'AUTORIZAR' : 'REVOCAR';
+    const confirmation = `${verb} ${request.agentId} ${request.operation} ${request.path}`;
+    streams.stderr.write(`${request.action === 'grant' ? 'Conceder' : 'Revocar'} acceso local a ${request.companyName} · Agent ${request.agentName} (#${request.agentId}) · ${request.operation} · ${request.path}.\n`);
+    streams.stderr.write('read permite al agente ver el contenido; write permite editarlo. Confirma exactamente con:\n');
+    const prompt = createInterface({ input: streams.stdin, output: streams.stderr, terminal: true });
+    try {
+        return (await prompt.question(`${confirmation}\n> `)) === confirmation;
+    } finally {
+        prompt.close();
+    }
 }
 
 export function parseAgentTasksOptions(argumentsList) {
@@ -1209,6 +1288,9 @@ function printHelp(stdout) {
     stdout.write('    Detecta Codex y Claude Code en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
     stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude\n');
     stdout.write('    Comprueba identidad, acceso a tarea y asignación del Agent. Solo muestra un plan; no inicia un modelo.\n');
+    stdout.write('  mycompany agent runtime files list | grant RUTA --operation=read|write | revoke RUTA --operation=read|write\n');
+    stdout.write('    Administra permisos de archivos locales para la identidad Agent seleccionada. grant y revoke requieren confirmación escrita en un terminal interactivo.\n');
+    stdout.write('    read expone el contenido al agente; write permite editarlo. La configuración y el historial permanecen privados en este PC; esto aún no inicia un proveedor.\n');
     stdout.write('  mycompany agent permissions\n');
     stdout.write('    Consulta el catálogo vigente de capacidades y los alcances que admiten.\n');
     stdout.write('  mycompany agent pause AGENT_ID | resume AGENT_ID\n');

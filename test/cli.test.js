@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimePlanOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 import { listLocalAgentRuntimes } from '../src/runtime.js';
@@ -66,6 +66,83 @@ test('agent runtime plan requires a positive task ID and explicit supported prov
     assert.throws(() => parseAgentRuntimePlanOptions(['0', '--provider=codex']), /positivo/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=other']), /proveedor/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=codex', '--provider=claude']), /Uso:/);
+});
+
+test('agent runtime file access commands require one safe path and one explicit operation', () => {
+    assert.deepEqual(parseAgentRuntimeFileAccessOptions(['list']), { action: 'list' });
+    assert.deepEqual(parseAgentRuntimeFileAccessOptions(['grant', '.env', '--operation=read']), {
+        action: 'grant',
+        path: '.env',
+        operation: 'read',
+    });
+    assert.deepEqual(parseAgentRuntimeFileAccessOptions(['revoke', 'reports/daily.md', '--operation=write']), {
+        action: 'revoke',
+        path: 'reports/daily.md',
+        operation: 'write',
+    });
+    assert.throws(() => parseAgentRuntimeFileAccessOptions(['grant', '../.env', '--operation=read']), /ruta segura/);
+    assert.throws(() => parseAgentRuntimeFileAccessOptions(['grant', '.env\nAUTORIZAR', '--operation=read']), /ruta segura/);
+    assert.throws(() => parseAgentRuntimeFileAccessOptions(['grant', '.env']), /Uso:/);
+    assert.throws(() => parseAgentRuntimeFileAccessOptions(['grant', '.env', '--operation=delete']), /read o write/);
+    assert.throws(() => parseAgentRuntimeFileAccessOptions(['grant', '.env', '--operation=read', '--operation=write']), /Uso:/);
+    assert.throws(() => parseAgentRuntimeFileAccessOptions(['list', '.env']), /Uso:/);
+});
+
+test('agent runtime file grant changes require confirmation and stay in local configuration', async () => {
+    const companyRoot = '/companies/devetty';
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+    const configurationChanges = [];
+    const confirmations = [];
+    const configStore = {
+        async loadAgentForDirectory(directory) {
+            assert.equal(directory, companyRoot);
+            return { agent_id: 12, agent_name: 'Vera', company_id: 4, company_name: 'Devetty' };
+        },
+        async grantAgentFileAccessForDirectory(...argumentsList) {
+            configurationChanges.push(argumentsList);
+            return { path: '.env', operations: ['read'], changed: true };
+        },
+    };
+    const confirm = async (request) => {
+        confirmations.push(request);
+        return true;
+    };
+
+    assert.equal(await run(
+        ['agent', 'runtime', 'files', 'grant', '.env', '--operation=read'],
+        { stdout: output, stderr: output, stdin: { isTTY: true } },
+        companyRoot,
+        configStore,
+        undefined,
+        confirm,
+    ), 0);
+    assert.deepEqual(configurationChanges, [[companyRoot, '.env', 'read', 12]]);
+    assert.equal(confirmations[0].agentId, 12);
+    assert.equal(confirmations[0].companyName, 'Devetty');
+    assert.match(output.value, /Permiso local concedido/);
+});
+
+test('agent runtime file grant is not saved when human confirmation is declined', async () => {
+    let changeCount = 0;
+    const configStore = {
+        async loadAgentForDirectory() {
+            return { agent_id: 12, agent_name: 'Vera', company_id: 4, company_name: 'Devetty' };
+        },
+        async grantAgentFileAccessForDirectory() {
+            changeCount++;
+        },
+    };
+    const confirm = async () => false;
+
+    await assert.rejects(run(
+        ['agent', 'runtime', 'files', 'grant', '.env', '--operation=write'],
+        { stdout: { write() {} }, stderr: { write() {} }, stdin: { isTTY: true } },
+        '/companies/devetty',
+        configStore,
+        undefined,
+        confirm,
+    ), /confirmación/);
+    assert.equal(changeCount, 0);
 });
 
 test('agent runtime plan checks the selected Agent and assigned task without starting a provider', async () => {
@@ -411,6 +488,9 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent login/);
     assert.match(output.value, /mycompany agent identities/);
     assert.match(output.value, /mycompany agent credential list AGENT_ID/);
+    assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
+    assert.match(output.value, /confirmación escrita en un terminal interactivo/);
+    assert.match(output.value, /read expone el contenido al agente/);
     assert.match(output.value, /mycompany agent me/);
     assert.match(output.value, /mycompany agent tasks/);
     assert.match(output.value, /mycompany agent bets/);

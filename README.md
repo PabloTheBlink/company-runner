@@ -135,6 +135,12 @@ mycompany agent forget
 
 `agent credential issue AGENT_ID --name=NOMBRE` requires the separate `agents.credentials.manage` permission and creates a runtime credential only for an active direct report. It stores the secret in the CLI's private per-user configuration and never writes it to terminal output or company files. `agent credential revoke AGENT_ID CREDENTIAL_ID` invalidates only the selected credential. Issuance and revocation record the acting Agent. To let a child Agent operate from the same company directory, set `MYCOMPANY_AGENT_ID` to that child's ID for its process; without it, the original/default Agent is selected. This does not grant the child any business permissions or launch an AI runtime.
 
+### Local Agent file grants
+
+`mycompany agent runtime files list` shows local file grants for the Agent identity selected in this company folder. Use `grant PATH --operation=read|write` or `revoke PATH --operation=read|write` to change one exact relative path. Each change requires entering the displayed confirmation phrase in an interactive terminal. `read` means the Agent may see the file contents; `write` permits changes. The policy and append-only change history are stored in the user's private configuration, separate from company files and server grants. Symlinks, absolute paths, traversal and terminal control characters are rejected.
+
+These commands record local policy only. They do not yet connect the policy to Codex/Claude or expose files to a model; no provider is started. The next runtime increment must use the staging mediator, recheck grants when applying edits, and ensure the provider cannot read outside its staged directory. A local grant does not authorize server API actions or network access.
+
 ## Credential storage
 
 Runner and Agent credentials are kept as separate JSON files under the user's private configuration directory. Agent credentials are selected by their associated company root and cannot be used as Runner credentials. The paths below show Runner storage; Agent files use the sibling `agents/` directory:

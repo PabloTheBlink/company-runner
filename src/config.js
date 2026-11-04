@@ -1,6 +1,8 @@
-import { chmod, lstat, mkdir, open, readFile, readdir, realpath, unlink } from 'node:fs/promises';
+import { chmod, lstat, mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { normalizeLocalAgentPath } from './runtime.js';
 
 export function defaultConfigPath(env = process.env) {
     let configHome;
@@ -29,6 +31,7 @@ export class ConfigStore {
         this.path = configPath;
         this.registrationsDirectory = path.join(path.dirname(configPath), 'runners');
         this.agentsDirectory = path.join(path.dirname(configPath), 'agents');
+        this.localAgentFilePolicyPath = path.join(path.dirname(configPath), 'agent-file-access.json');
     }
 
     async saveNew(configuration) {
@@ -168,6 +171,180 @@ export class ConfigStore {
     async forgetAgent(currentDirectory = process.cwd()) {
         const agent = await this.selectAgentForDirectory(currentDirectory);
         await unlink(agent.filePath);
+    }
+
+    async listAgentFileAccessForDirectory(currentDirectory = process.cwd(), selectedAgentId = process.env.MYCOMPANY_AGENT_ID) {
+        const agent = await this.selectAgentForDirectory(currentDirectory, selectedAgentId);
+        const policy = await this.readLocalAgentFilePolicy();
+
+        return policy.grants
+            .filter((grant) => grant.company_id === agent.configuration.company_id
+                && grant.agent_id === agent.configuration.agent_id
+                && grant.company_root_path === agent.resolvedCompanyRootPath)
+            .map(({ path: relativePath, operations }) => ({ path: relativePath, operations }));
+    }
+
+    async grantAgentFileAccessForDirectory(
+        currentDirectory,
+        relativePath,
+        operation,
+        selectedAgentId = process.env.MYCOMPANY_AGENT_ID,
+    ) {
+        return this.changeAgentFileAccess('grant', currentDirectory, relativePath, operation, selectedAgentId);
+    }
+
+    async revokeAgentFileAccessForDirectory(
+        currentDirectory,
+        relativePath,
+        operation,
+        selectedAgentId = process.env.MYCOMPANY_AGENT_ID,
+    ) {
+        return this.changeAgentFileAccess('revoke', currentDirectory, relativePath, operation, selectedAgentId);
+    }
+
+    async changeAgentFileAccess(action, currentDirectory, relativePath, operation, selectedAgentId) {
+        if (!['grant', 'revoke'].includes(action) || !['read', 'write'].includes(operation)) {
+            throw new Error('La operación de permiso local no es válida.');
+        }
+        const normalizedPath = normalizeLocalAgentPath(relativePath);
+        if (normalizedPath === null) throw new Error('La ruta local autorizada no es válida.');
+
+        const agent = await this.selectAgentForDirectory(currentDirectory, selectedAgentId);
+        const companyId = agent.configuration.company_id;
+        const agentId = agent.configuration.agent_id;
+        const companyRootPath = agent.resolvedCompanyRootPath;
+        const policy = await this.readLocalAgentFilePolicy();
+        let grant = policy.grants.find((entry) => entry.company_id === companyId
+            && entry.agent_id === agentId
+            && entry.company_root_path === companyRootPath
+            && entry.path === normalizedPath);
+        let changed = false;
+
+        if (action === 'grant') {
+            if (grant === undefined) {
+                grant = {
+                    company_id: companyId,
+                    company_root_path: companyRootPath,
+                    agent_id: agentId,
+                    path: normalizedPath,
+                    operations: [],
+                };
+                policy.grants.push(grant);
+            }
+            if (!grant.operations.includes(operation)) {
+                grant.operations = ['read', 'write'].filter((entry) => grant.operations.includes(entry) || entry === operation);
+                changed = true;
+            }
+        } else if (grant !== undefined && grant.operations.includes(operation)) {
+            grant.operations = grant.operations.filter((entry) => entry !== operation);
+            if (grant.operations.length === 0) {
+                policy.grants = policy.grants.filter((entry) => entry !== grant);
+            }
+            changed = true;
+        }
+
+        if (changed) {
+            policy.events.push({
+                action,
+                company_id: companyId,
+                agent_id: agentId,
+                path: normalizedPath,
+                operation,
+                occurred_at: new Date().toISOString(),
+            });
+            await this.writeLocalAgentFilePolicy(policy);
+        }
+
+        const currentGrant = policy.grants.find((entry) => entry.company_id === companyId
+            && entry.agent_id === agentId
+            && entry.company_root_path === companyRootPath
+            && entry.path === normalizedPath);
+
+        return {
+            path: normalizedPath,
+            operations: currentGrant?.operations ?? [],
+            changed,
+        };
+    }
+
+    async readLocalAgentFilePolicy() {
+        let directoryInfo;
+        try {
+            directoryInfo = await lstat(path.dirname(this.localAgentFilePolicyPath));
+        } catch (error) {
+            if (error.code === 'ENOENT') return { version: 1, grants: [], events: [] };
+            throw error;
+        }
+        if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) {
+            throw new Error('La carpeta de política local Agent no es válida.');
+        }
+        this.assertPrivateMode(directoryInfo, 'La carpeta de política local Agent permite acceso a otros usuarios. Protege la carpeta con permisos 0700.');
+        await this.rejectSymlink(this.localAgentFilePolicyPath);
+        let fileInfo;
+        try {
+            fileInfo = await lstat(this.localAgentFilePolicyPath);
+        } catch (error) {
+            if (error.code === 'ENOENT') return { version: 1, grants: [], events: [] };
+            throw error;
+        }
+
+        if (!fileInfo.isFile()) throw new Error('La política local de archivos Agent no es un archivo normal.');
+        this.assertPrivateMode(fileInfo, 'La política local de archivos Agent permite acceso a otros usuarios. Protege el archivo con permisos 0600.');
+
+        let policy;
+        try {
+            policy = JSON.parse(await readFile(this.localAgentFilePolicyPath, 'utf8'));
+        } catch {
+            throw new Error('La política local de archivos Agent no es válida.');
+        }
+        if (policy?.version !== 1 || !Array.isArray(policy.grants) || !Array.isArray(policy.events)) {
+            throw new Error('La política local de archivos Agent no es válida.');
+        }
+
+        for (const grant of policy.grants) {
+            if (!Number.isSafeInteger(grant?.company_id) || grant.company_id < 1
+                || !Number.isSafeInteger(grant.agent_id) || grant.agent_id < 1
+                || typeof grant.company_root_path !== 'string' || !path.isAbsolute(grant.company_root_path)
+                || normalizeLocalAgentPath(grant.path) !== grant.path
+                || !Array.isArray(grant.operations) || grant.operations.length === 0
+                || grant.operations.some((operation) => !['read', 'write'].includes(operation))
+                || new Set(grant.operations).size !== grant.operations.length) {
+                throw new Error('La política local de archivos Agent contiene permisos no válidos.');
+            }
+        }
+        for (const event of policy.events) {
+            if (!['grant', 'revoke'].includes(event?.action)
+                || !Number.isSafeInteger(event.company_id) || event.company_id < 1
+                || !Number.isSafeInteger(event.agent_id) || event.agent_id < 1
+                || normalizeLocalAgentPath(event.path) !== event.path
+                || !['read', 'write'].includes(event.operation)
+                || typeof event.occurred_at !== 'string') {
+                throw new Error('La política local de archivos Agent contiene un historial no válido.');
+            }
+        }
+
+        return policy;
+    }
+
+    async writeLocalAgentFilePolicy(policy) {
+        const directoryPath = path.dirname(this.localAgentFilePolicyPath);
+        await this.ensurePrivateDirectory(directoryPath);
+        await this.rejectSymlink(this.localAgentFilePolicyPath);
+        const temporaryPath = `${this.localAgentFilePolicyPath}.${randomUUID()}.tmp`;
+        let file;
+        try {
+            file = await open(temporaryPath, 'wx', 0o600);
+            await file.writeFile(`${JSON.stringify(policy, null, 2)}\n`, 'utf8');
+            await file.sync();
+            await file.close();
+            file = null;
+            if (process.platform !== 'win32') await chmod(temporaryPath, 0o600);
+            await rename(temporaryPath, this.localAgentFilePolicyPath);
+        } catch (error) {
+            await file?.close().catch(() => {});
+            await unlink(temporaryPath).catch(() => {});
+            throw new Error('No se pudo guardar la política local de archivos Agent.', { cause: error });
+        }
     }
 
     async selectAgentForDirectory(currentDirectory, selectedAgentId = process.env.MYCOMPANY_AGENT_ID) {

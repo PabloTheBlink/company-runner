@@ -20,6 +20,8 @@ test('rejects unsafe paths and unsupported local file operations', () => {
 
     assert.equal(isLocalFileOperationAllowed(12, grants, 'read', '../.env'), false);
     assert.equal(isLocalFileOperationAllowed(12, grants, 'read', '/etc/passwd'), false);
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'read', '.env\nAUTORIZAR'), false);
+    assert.equal(isLocalFileOperationAllowed(12, grants, 'read', 'reports/'), false);
     assert.equal(isLocalFileOperationAllowed(12, grants, 'delete', '.env'), false);
     assert.equal(isLocalFileOperationAllowed(12, grants, 'read', ''), false);
 });

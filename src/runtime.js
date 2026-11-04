@@ -53,7 +53,9 @@ export function isLocalFileOperationAllowed(agentId, grants, operation, relative
 }
 
 export function normalizeLocalAgentPath(value) {
-    if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) return null;
+    if (typeof value !== 'string' || value.length === 0
+        || /[\u0000-\u001f\u007f]/.test(value)
+        || value.endsWith('/') || value.endsWith('\\')) return null;
 
     const portablePath = value.replaceAll('\\', '/');
     if (portablePath.startsWith('/') || /^[a-zA-Z]:/.test(portablePath)) return null;

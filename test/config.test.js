@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { ConfigStore } from '../src/config.js';
@@ -59,6 +59,86 @@ test('agent credentials are stored separately with private permissions and selec
         assert.equal((await stat(store.agentsDirectory)).mode & 0o777, 0o700);
         await store.forgetAgent(nestedProject);
         await assert.rejects(store.loadAgentForDirectory(nestedProject), /No hay un agente configurado/);
+    });
+});
+
+test('local Agent file access grants are private, company scoped, and keep a change history', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const firstCompany = path.join(directory, 'companies', 'first');
+        const secondCompany = path.join(directory, 'companies', 'second');
+        await mkdir(firstCompany, { recursive: true });
+        await mkdir(secondCompany, { recursive: true });
+        const createAgentConfiguration = (agentId, companyId, companyName, companyRootPath) => ({
+            server_url: 'https://mycompanies.example',
+            agent_id: agentId,
+            agent_name: `Agent ${agentId}`,
+            company_id: companyId,
+            company_name: companyName,
+            company_root_path: companyRootPath,
+            allow_insecure_localhost: false,
+            api_token: 'A'.repeat(80),
+        });
+        await store.saveAgent(createAgentConfiguration(12, 4, 'First', firstCompany));
+        await store.saveAgent(createAgentConfiguration(13, 5, 'Second', secondCompany));
+
+        assert.deepEqual(await store.grantAgentFileAccessForDirectory(firstCompany, '.env', 'read', 12), {
+            path: '.env',
+            operations: ['read'],
+            changed: true,
+        });
+        await store.grantAgentFileAccessForDirectory(firstCompany, '.env', 'write', 12);
+        await store.grantAgentFileAccessForDirectory(secondCompany, '.env', 'write', 13);
+
+        assert.deepEqual(await store.listAgentFileAccessForDirectory(firstCompany, 12), [
+            { path: '.env', operations: ['read', 'write'] },
+        ]);
+        assert.deepEqual(await store.listAgentFileAccessForDirectory(secondCompany, 13), [
+            { path: '.env', operations: ['write'] },
+        ]);
+
+        const policy = JSON.parse(await readFile(store.localAgentFilePolicyPath, 'utf8'));
+        assert.equal(policy.version, 1);
+        assert.equal(policy.events.length, 3);
+        assert.equal((await stat(store.localAgentFilePolicyPath)).mode & 0o777, 0o600);
+        assert.equal((await stat(path.dirname(store.localAgentFilePolicyPath))).mode & 0o777, 0o700);
+
+        assert.deepEqual(await store.revokeAgentFileAccessForDirectory(firstCompany, '.env', 'read', 12), {
+            path: '.env',
+            operations: ['write'],
+            changed: true,
+        });
+        assert.deepEqual(await store.listAgentFileAccessForDirectory(firstCompany, 12), [
+            { path: '.env', operations: ['write'] },
+        ]);
+        assert.deepEqual(await store.listAgentFileAccessForDirectory(secondCompany, 13), [
+            { path: '.env', operations: ['write'] },
+        ]);
+    });
+});
+
+test('local Agent file access policy rejects unsafe paths and symbolic links', async () => {
+    await withTemporaryConfig(async (store, directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configuration = {
+            server_url: 'https://mycompanies.example',
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: false,
+            api_token: 'A'.repeat(80),
+        };
+        await store.saveAgent(configuration);
+
+        await assert.rejects(store.grantAgentFileAccessForDirectory(companyRoot, '../outside.env', 'read', 12), /ruta local autorizada no es válida/);
+        await mkdir(path.dirname(store.localAgentFilePolicyPath), { recursive: true });
+        const linkedPolicyPath = path.join(directory, 'linked-policy.json');
+        await writeFile(linkedPolicyPath, JSON.stringify({ version: 1, grants: [], events: [] }), { mode: 0o600 });
+        await symlink(linkedPolicyPath, store.localAgentFilePolicyPath);
+
+        await assert.rejects(store.listAgentFileAccessForDirectory(companyRoot, 12), /enlace simbólico/);
     });
 });
 
