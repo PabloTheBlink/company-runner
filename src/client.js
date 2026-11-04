@@ -457,6 +457,37 @@ export class AgentClient {
         return response.body.bet;
     }
 
+    async addBetEvidence(betId, evidenceData, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(betId) || betId < 1) {
+            throw new Error('El ID de apuesta debe ser un entero positivo.');
+        }
+        if (!isBetEvidenceInput(evidenceData)) {
+            throw new Error('La evidencia requiere título, detalles y una valoración válida; la fuente debe usar HTTP o HTTPS.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(`${serverUrl}/api/v1/agent/bets/${betId}/evidences`, evidenceData, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita bets.manage en su empresa para registrar evidencias (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La apuesta no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó la evidencia. Revisa el título, los detalles, la valoración y la fuente (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 201 || !isRecordedAgentEvidence(response.body.evidence)) {
+            throw new Error('MyCompanies devolvió una respuesta de evidencia Agent no válida.');
+        }
+        return response.body.evidence;
+    }
+
     async editTask(taskId, changes, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(taskId) || taskId < 1) {
             throw new Error('El ID de tarea debe ser un entero positivo.');
@@ -611,7 +642,7 @@ export class AgentClient {
         return response.body;
     }
 
-    async postJson(endpoint, payload, apiToken, idempotencyKey) {
+    async postJson(endpoint, payload, apiToken, idempotencyKey = null) {
         let response;
         try {
             response = await this.fetch(endpoint, {
@@ -620,7 +651,7 @@ export class AgentClient {
                     Accept: 'application/json',
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${apiToken}`,
-                    'Idempotency-Key': idempotencyKey,
+                    ...(idempotencyKey === null ? {} : { 'Idempotency-Key': idempotencyKey }),
                 },
                 body: JSON.stringify(payload),
                 redirect: 'manual',
@@ -806,7 +837,45 @@ function isAgentBet(bet) {
             && typeof evidence.title === 'string'
             && typeof evidence.details === 'string'
             && ['supports', 'challenges', 'neutral'].includes(evidence.assessment)
-            && (evidence.source_url === null || typeof evidence.source_url === 'string'));
+            && (evidence.source_url === null || typeof evidence.source_url === 'string')
+            && (evidence.recorded_by === null
+                || (typeof evidence.recorded_by === 'object'
+                    && evidence.recorded_by.type === 'agent'
+                    && Number.isInteger(evidence.recorded_by.id)
+                    && typeof evidence.recorded_by.name === 'string')));
+}
+
+function isBetEvidenceInput(evidence) {
+    if (evidence === null || typeof evidence !== 'object' || Array.isArray(evidence)) return false;
+    const { title, details, assessment, source_url: sourceUrl } = evidence;
+    if (typeof title !== 'string' || title.trim() === '' || title.length > 160
+        || typeof details !== 'string' || details.trim() === '' || details.length > 2000
+        || !['supports', 'challenges', 'neutral'].includes(assessment)
+        || (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== 'string')) {
+        return false;
+    }
+    if (sourceUrl === undefined || sourceUrl === null) return true;
+    try {
+        return ['http:', 'https:'].includes(new URL(sourceUrl).protocol) && sourceUrl.length <= 2048;
+    } catch {
+        return false;
+    }
+}
+
+function isRecordedAgentEvidence(evidence) {
+    return evidence !== null
+        && typeof evidence === 'object'
+        && Number.isInteger(evidence.id)
+        && evidence.id > 0
+        && typeof evidence.title === 'string'
+        && typeof evidence.details === 'string'
+        && ['supports', 'challenges', 'neutral'].includes(evidence.assessment)
+        && (evidence.source_url === null || typeof evidence.source_url === 'string')
+        && evidence.recorded_by !== null
+        && typeof evidence.recorded_by === 'object'
+        && evidence.recorded_by.type === 'agent'
+        && Number.isInteger(evidence.recorded_by.id)
+        && typeof evidence.recorded_by.name === 'string';
 }
 
 function isCreatedAgentTask(task) {
