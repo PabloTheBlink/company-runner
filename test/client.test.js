@@ -221,6 +221,67 @@ test('agent task detail retrieves only the requested task and accepts a company-
     });
 });
 
+test('agent bet list and detail use Agent auth and validate returned evidence', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (request.url === '/api/v1/agent/bets?after_id=5') {
+                response.end(JSON.stringify({
+                    bets: [{ id: 6, title: 'Informe', status: 'investigating' }],
+                    has_more: false,
+                    next_after: null,
+                }));
+                return;
+            }
+            assert.equal(request.url, '/api/v1/agent/bets/6');
+            response.end(JSON.stringify({
+                bet: {
+                    id: 6,
+                    title: 'Informe',
+                    hypothesis: 'La demanda es suficiente.',
+                    description: null,
+                    status: 'investigating',
+                    evidences: [{
+                        id: 3,
+                        title: 'Entrevistas',
+                        details: 'Cinco conversaciones positivas.',
+                        assessment: 'supports',
+                        source_url: null,
+                    }],
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const bets = await client.listBets(companyRoot, 5);
+            const bet = await client.getBet(6, companyRoot);
+            assert.equal(bets.bets[0].id, 6);
+            assert.equal(bet.evidences[0].assessment, 'supports');
+            await assert.rejects(client.getBet(0, companyRoot), /entero positivo/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent status update sends the explicit status to the scoped Agent endpoint', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');

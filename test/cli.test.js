@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssignmentOptions, parseAgentLoginOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssignmentOptions, parseAgentBetsOptions, parseAgentLoginOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -47,6 +47,13 @@ test('agent task listing accepts a single positive cursor', () => {
     assert.deepEqual(parseAgentTasksOptions(['--after=25']), { afterId: 25 });
     assert.throws(() => parseAgentTasksOptions(['--after=0']), /entero positivo/);
     assert.throws(() => parseAgentTasksOptions(['--after=25', '--after=50']), /Opción desconocida/);
+});
+
+test('agent bet listing accepts a single positive cursor', () => {
+    assert.deepEqual(parseAgentBetsOptions([]), { afterId: null });
+    assert.deepEqual(parseAgentBetsOptions(['--after=25']), { afterId: 25 });
+    assert.throws(() => parseAgentBetsOptions(['--after=0']), /entero positivo/);
+    assert.throws(() => parseAgentBetsOptions(['--other']), /Opción desconocida/);
 });
 
 test('agent status command requires a task ID and supported target status', () => {
@@ -107,6 +114,8 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent login/);
     assert.match(output.value, /mycompany agent me/);
     assert.match(output.value, /mycompany agent tasks/);
+    assert.match(output.value, /mycompany agent bets/);
+    assert.match(output.value, /mycompany agent bet ID/);
     assert.match(output.value, /mycompany agent task ID/);
     assert.match(output.value, /mycompany agent task status ID ESTADO/);
     assert.match(output.value, /mycompany agent task create/);

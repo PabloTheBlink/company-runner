@@ -60,6 +60,39 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             }
             return 0;
         }
+        if (agentCommand === 'bets') {
+            const options = parseAgentBetsOptions(agentArguments);
+            const result = await agentClient.listBets(currentDirectory, options.afterId);
+            if (result.bets.length === 0) {
+                streams.stdout.write('No hay apuestas registradas para esta empresa.\n');
+                return 0;
+            }
+            streams.stdout.write(`Apuestas de la empresa (${result.bets.length}):\n`);
+            for (const bet of result.bets) {
+                const status = { proposed: 'propuesta', investigating: 'investigando', validated: 'validada', discarded: 'descartada', converted: 'convertida', archived: 'archivada' }[bet.status];
+                streams.stdout.write(`#${bet.id} [${status}] ${safeTerminalText(bet.title)}\n`);
+            }
+            if (result.has_more) {
+                streams.stdout.write(`Hay más apuestas. Continúa con: mycompany agent bets --after=${result.next_after}\n`);
+            }
+            return 0;
+        }
+        if (agentCommand === 'bet' && agentArguments.length === 1) {
+            const bet = await agentClient.getBet(parseTaskId(agentArguments[0]), currentDirectory);
+            const status = { proposed: 'propuesta', investigating: 'investigando', validated: 'validada', discarded: 'descartada', converted: 'convertida', archived: 'archivada' }[bet.status];
+            streams.stdout.write(`#${bet.id} · ${safeTerminalText(bet.title)}\n`);
+            streams.stdout.write(`Estado: ${status}\nHipótesis: ${safeTerminalText(bet.hypothesis)}\n`);
+            if (bet.description !== null && bet.description !== '') {
+                streams.stdout.write(`Descripción: ${safeTerminalText(bet.description)}\n`);
+            }
+            streams.stdout.write(`Evidencias (${bet.evidences.length}):\n`);
+            for (const evidence of bet.evidences) {
+                const assessment = { supports: 'apoya', challenges: 'cuestiona', neutral: 'neutral' }[evidence.assessment];
+                streams.stdout.write(`- ${safeTerminalText(evidence.title)} [${assessment}]: ${safeTerminalText(evidence.details)}\n`);
+                if (evidence.source_url !== null) streams.stdout.write(`  Fuente: ${safeTerminalText(evidence.source_url)}\n`);
+            }
+            return 0;
+        }
         if (agentCommand === 'task' && agentArguments.length === 1) {
             const taskId = parseTaskId(agentArguments[0]);
             const task = await agentClient.getTask(taskId, currentDirectory);
@@ -240,6 +273,14 @@ export function parseAgentTasksOptions(argumentsList) {
     if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent tasks. Usa --after=ID.');
     const match = /^--after=(.+)$/.exec(argumentsList[0]);
     if (match === null) throw new Error('Opción desconocida para agent tasks. Usa --after=ID.');
+    return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseAgentBetsOptions(argumentsList) {
+    if (argumentsList.length === 0) return { afterId: null };
+    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para agent bets. Usa --after=ID.');
+    const match = /^--after=(.+)$/.exec(argumentsList[0]);
+    if (match === null) throw new Error('Opción desconocida para agent bets. Usa --after=ID.');
     return { afterId: parseTaskId(match[1]) };
 }
 
@@ -442,6 +483,10 @@ function printHelp(stdout) {
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
     stdout.write('  mycompany agent tasks [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
+    stdout.write('  mycompany agent bets [--after=ID]\n');
+    stdout.write('    Lista apuestas de la empresa con bets.read o bets.manage. Solo muestra título y estado.\n');
+    stdout.write('  mycompany agent bet ID\n');
+    stdout.write('    Muestra hipótesis, descripción y evidencias de una apuesta permitida, como texto sin ejecutarlas.\n');
     stdout.write('  mycompany agent task ID\n');
     stdout.write('    Consulta una tarea activa dentro del ámbito Agent y muestra descripción y detalles como texto. No interpreta instrucciones.\n');
     stdout.write('  mycompany agent task status ID ESTADO\n');

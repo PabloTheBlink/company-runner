@@ -400,6 +400,63 @@ export class AgentClient {
         return response.body.task;
     }
 
+    async listBets(currentDirectory = process.cwd(), afterId = null) {
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de apuestas debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/bets${cursor}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene bets.read o bets.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.bets)
+            || response.body.bets.length > 100
+            || typeof response.body.has_more !== 'boolean'
+            || response.body.bets.some((bet) => !isAgentBetSummary(bet))
+            || (response.body.has_more
+                ? !Number.isInteger(response.body.next_after)
+                    || response.body.next_after < 1
+                    || response.body.bets.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
+            throw new Error('MyCompanies devolvió una lista de apuestas Agent no válida.');
+        }
+        return response.body;
+    }
+
+    async getBet(betId, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(betId) || betId < 1) {
+            throw new Error('El ID de apuesta debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/bets/${betId}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente no tiene bets.read o bets.manage en su empresa (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La apuesta no existe o no está disponible para la empresa de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || !isAgentBet(response.body.bet)) {
+            throw new Error('MyCompanies devolvió un detalle de apuesta Agent no válido.');
+        }
+        return response.body.bet;
+    }
+
     async editTask(taskId, changes, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(taskId) || taskId < 1) {
             throw new Error('El ID de tarea debe ser un entero positivo.');
@@ -726,6 +783,30 @@ function isAgentTask(task, includeDescription = false) {
                 && Number.isInteger(task.workspace.id)
                 && task.workspace.id > 0
                 && typeof task.workspace.name === 'string'));
+}
+
+function isAgentBetSummary(bet) {
+    return bet !== null
+        && typeof bet === 'object'
+        && Number.isInteger(bet.id)
+        && bet.id > 0
+        && typeof bet.title === 'string'
+        && ['proposed', 'investigating', 'validated', 'discarded', 'converted', 'archived'].includes(bet.status);
+}
+
+function isAgentBet(bet) {
+    return isAgentBetSummary(bet)
+        && typeof bet.hypothesis === 'string'
+        && (bet.description === null || typeof bet.description === 'string')
+        && Array.isArray(bet.evidences)
+        && bet.evidences.every((evidence) => evidence !== null
+            && typeof evidence === 'object'
+            && Number.isInteger(evidence.id)
+            && evidence.id > 0
+            && typeof evidence.title === 'string'
+            && typeof evidence.details === 'string'
+            && ['supports', 'challenges', 'neutral'].includes(evidence.assessment)
+            && (evidence.source_url === null || typeof evidence.source_url === 'string'));
 }
 
 function isCreatedAgentTask(task) {
