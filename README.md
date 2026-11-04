@@ -48,6 +48,8 @@ Enter the one-time code from the MyCompanies Runners page when prompted. The pro
 
 Owners and admins can revoke a Runner from its company page. Revocation disables its enrollment code and credential, closes still-authorized executions, and expires their leased attempts. Workspace changes are company-scoped and are rejected for revoked Runners. Invitation links are likewise bound to one company; only a matching authenticated account can accept them, and an owner cannot revoke another company's invitation. Regression tests cover cross-company invitation revocation and Runner workspace assignment.
 
+On the web server, sensitive bet actions also recheck current company membership while holding the company lock in the write transaction. Evidence recording and converting a validated bet into an offer stop if the actor lost owner/admin access while the request was in flight; the bet is loaded through that company before writing.
+
 ## Real Codex trial status
 
 On 2026-11-04, Codex CLI 0.157.0 was launched directly with `codex exec` in Devetty's new `reports/apify-eu-ted/` folder and wrote a market audit for MyCompanies task #7. The task and its public Store research were selected and prepared manually. Marta's local `instructions.md` was used only as prompt context: the marketing agent Marta was **not** executed, authenticated, or recorded as the author. Later, the Runner's Codex adapter was verified with a real isolated `CODEX_RUNTIME_OK` run and a canary check that confirmed a file outside staging was blocked. This validates Codex invocation and sandbox behavior, but no company task has yet run through the Agent identity. The task, credentials and grants still need owner/admin setup for Marta.
