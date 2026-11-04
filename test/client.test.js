@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
@@ -375,6 +375,124 @@ test('agent offer status update uses the management endpoint and confirms its ac
         try {
             const result = await new AgentClient(configStore).updateOfferStatus(26, 'available', companyRoot);
             assert.equal(result.changed_by.name, 'Vera');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('agent publishes one selected company report and reads its artifact list', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        const reportDirectory = path.join(companyRoot, 'reports');
+        await mkdir(reportDirectory, { recursive: true });
+        const reportPath = path.join(reportDirectory, 'daily.md');
+        await writeFile(reportPath, '# Daily report\nThree opportunities.');
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            if (request.method === 'POST') {
+                assert.equal(request.url, '/api/v1/agent/artifacts');
+                assert.match(request.headers['content-type'], /^multipart\/form-data; boundary=/);
+                const chunks = [];
+                for await (const chunk of request) chunks.push(chunk);
+                const body = Buffer.concat(chunks).toString();
+                assert.match(body, /name="title"\r\n\r\nInforme diario/);
+                assert.match(body, /filename="daily\.md"/);
+                assert.match(body, /Three opportunities\./);
+                response.writeHead(201, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ artifact: {
+                    id: 32,
+                    title: 'Informe diario',
+                    description: null,
+                    source: 'script mercado',
+                    original_filename: 'daily.md',
+                    mime_type: 'text/plain',
+                    size_bytes: 34,
+                    sha256: 'a'.repeat(64),
+                    created_at: '2026-11-04T12:00:00.000000Z',
+                    uploaded_by: { type: 'agent', id: 12, name: 'Analista' },
+                } }));
+                return;
+            }
+            assert.equal(request.url, '/api/v1/agent/artifacts?after_id=30');
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ artifacts: [{
+                id: 32,
+                title: 'Informe diario',
+                description: null,
+                source: 'script mercado',
+                original_filename: 'daily.md',
+                mime_type: 'text/plain',
+                size_bytes: 34,
+                sha256: 'a'.repeat(64),
+                created_at: '2026-11-04T12:00:00.000000Z',
+                uploaded_by: { type: 'agent', id: 12, name: 'Analista' },
+            }], has_more: false, next_after: null }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Analista',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const published = await client.publishArtifact('reports/daily.md', {
+                title: 'Informe diario',
+                source: 'script mercado',
+            }, companyRoot);
+            assert.equal(published.id, 32);
+            const list = await client.listArtifacts(companyRoot, 30);
+            assert.equal(list.artifacts[0].uploaded_by.name, 'Analista');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('agent downloads reports only inside the company root without overwriting files', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        const reportDirectory = path.join(companyRoot, 'reports');
+        await mkdir(reportDirectory, { recursive: true });
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer((request, response) => {
+            assert.equal(request.method, 'GET');
+            assert.equal(request.url, '/api/v1/agent/artifacts/32/download');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'text/plain' });
+            response.end('Shared report.');
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Analista',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const result = await client.downloadArtifact(32, 'reports/shared.txt', companyRoot);
+            assert.equal(await readFile(result.outputPath, 'utf8'), 'Shared report.');
+            assert.equal((await stat(result.outputPath)).mode & 0o777, 0o600);
+            await assert.rejects(client.downloadArtifact(32, 'reports/shared.txt', companyRoot), /no se sobrescribe/);
+            await assert.rejects(client.downloadArtifact(32, '../../outside.txt', companyRoot), /dentro de la carpeta/);
         } finally {
             server.close();
             await once(server, 'close');

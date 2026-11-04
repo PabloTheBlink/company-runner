@@ -1,8 +1,11 @@
-import { realpath, readdir, stat } from 'node:fs/promises';
+import { lstat, open, realpath, readdir, readFile, stat } from 'node:fs/promises';
+import { basename, dirname, extname, relative, resolve, sep } from 'node:path';
 const API_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const ENROLLMENT_CODE_PATTERN = /^[A-Za-z0-9]{64}$/;
 const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
+const ARTIFACT_EXTENSIONS = new Set(['.md', '.txt', '.pdf']);
 
 export function normalizeServerUrl(serverUrl, allowInsecureLocalhost = false) {
     if (typeof serverUrl !== 'string' || serverUrl.trim() !== serverUrl || /[\r\n\0\t ]/.test(serverUrl)) {
@@ -341,6 +344,163 @@ export class AgentClient {
 
     async forget(currentDirectory = process.cwd()) {
         await this.configStore.forgetAgent(currentDirectory);
+    }
+
+    async publishArtifact(filePath, metadata, currentDirectory = process.cwd()) {
+        if (typeof filePath !== 'string' || filePath.trim() === '') {
+            throw new Error('Indica el archivo concreto que quieres publicar.');
+        }
+        if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)
+            || typeof metadata.title !== 'string' || metadata.title.trim() === '' || metadata.title.length > 160
+            || (metadata.description !== undefined && (typeof metadata.description !== 'string' || metadata.description.length > 2000))
+            || (metadata.source !== undefined && (typeof metadata.source !== 'string' || metadata.source.length > 160))) {
+            throw new Error('El informe requiere un título y metadatos válidos.');
+        }
+
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const companyRootPath = await realpath(configuration.company_root_path);
+        const selectedPath = resolve(currentDirectory, filePath);
+        let selectedLink;
+        try {
+            selectedLink = await lstat(selectedPath);
+        } catch {
+            throw new Error('El archivo indicado no existe o no se puede leer.');
+        }
+        if (selectedLink.isSymbolicLink()) {
+            throw new Error('No se publican enlaces simbólicos. Indica el archivo real que quieres compartir.');
+        }
+
+        let sourcePath;
+        try {
+            sourcePath = await realpath(selectedPath);
+        } catch {
+            throw new Error('El archivo indicado no existe o no se puede leer.');
+        }
+        if (!isPathInside(companyRootPath, sourcePath)) {
+            throw new Error('Solo se pueden publicar archivos dentro de la carpeta de esta empresa.');
+        }
+        const sourceStats = await stat(sourcePath);
+        if (!sourceStats.isFile()) {
+            throw new Error('Solo se pueden publicar archivos normales, no carpetas.');
+        }
+        if (sourceStats.size < 1 || sourceStats.size > MAX_ARTIFACT_BYTES) {
+            throw new Error('El archivo debe tener entre 1 byte y 10 MB.');
+        }
+        const extension = extname(sourcePath).toLowerCase();
+        if (!ARTIFACT_EXTENSIONS.has(extension)) {
+            throw new Error('Solo se admiten informes .md, .txt o .pdf.');
+        }
+
+        const form = new FormData();
+        form.append('title', metadata.title);
+        if (metadata.description !== undefined) form.append('description', metadata.description);
+        if (metadata.source !== undefined) form.append('source', metadata.source);
+        const mimeType = extension === '.pdf' ? 'application/pdf' : 'text/plain';
+        form.append('file', new Blob([await readFile(sourcePath)], { type: mimeType }), basename(sourcePath));
+
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postMultipart(`${serverUrl}/api/v1/agent/artifacts`, form, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita artifacts.publish para publicar informes (HTTP 403).');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó el informe. Comprueba el título y que el archivo sea .md, .txt o .pdf de hasta 10 MB (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 201 || !isArtifactSummary(response.body.artifact)) {
+            throw new Error('MyCompanies devolvió una respuesta de publicación de informe no válida.');
+        }
+        return response.body.artifact;
+    }
+
+    async listArtifacts(currentDirectory = process.cwd(), afterId = null) {
+        if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
+            throw new Error('El cursor de informes debe ser un entero positivo.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const cursor = afterId === null ? '' : `?after_id=${afterId}`;
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/artifacts${cursor}`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita artifacts.read para consultar informes (HTTP 403).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200
+            || !Array.isArray(response.body.artifacts)
+            || response.body.artifacts.length > 100
+            || response.body.artifacts.some((artifact) => !isArtifactSummary(artifact))
+            || typeof response.body.has_more !== 'boolean'
+            || (response.body.has_more
+                ? !Number.isInteger(response.body.next_after)
+                    || response.body.artifacts.at(-1)?.id !== response.body.next_after
+                : response.body.next_after !== null)) {
+            throw new Error('MyCompanies devolvió una lista de informes no válida.');
+        }
+        return response.body;
+    }
+
+    async downloadArtifact(artifactId, outputPath, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(artifactId) || artifactId < 1) {
+            throw new Error('El ID de informe debe ser un entero positivo.');
+        }
+        if (typeof outputPath !== 'string' || outputPath.trim() === '') {
+            throw new Error('Indica una ruta de salida para el informe.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const companyRootPath = await realpath(configuration.company_root_path);
+        const targetPath = resolve(currentDirectory, outputPath);
+        if (!ARTIFACT_EXTENSIONS.has(extname(targetPath).toLowerCase())) {
+            throw new Error('La ruta de salida debe terminar en .md, .txt o .pdf.');
+        }
+        const targetDirectory = await realpath(dirname(targetPath)).catch(() => null);
+        if (targetDirectory === null || !isPathInside(companyRootPath, targetDirectory)) {
+            throw new Error('La carpeta de salida debe existir dentro de la carpeta de esta empresa.');
+        }
+        try {
+            await lstat(targetPath);
+            throw new Error('El archivo de salida ya existe; no se sobrescribe.');
+        } catch (error) {
+            if (error instanceof Error && error.message.includes('no se sobrescribe')) throw error;
+            if (error?.code !== 'ENOENT') throw new Error('No se pudo comprobar la ruta de salida.');
+        }
+
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getBinary(`${serverUrl}/api/v1/agent/artifacts/${artifactId}/download`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita artifacts.read para descargar informes (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El informe no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (response.status !== 200 || response.bytes.length === 0) {
+            throw new Error('MyCompanies devolvió un archivo de informe no válido.');
+        }
+
+        const outputFile = await open(targetPath, 'wx', 0o600).catch(() => null);
+        if (outputFile === null) throw new Error('No se pudo crear el archivo de salida sin sobrescribir datos.');
+        try {
+            await outputFile.writeFile(response.bytes);
+        } finally {
+            await outputFile.close();
+        }
+
+        return { outputPath: targetPath };
     }
 
     async listTasks(currentDirectory = process.cwd(), afterId = null) {
@@ -881,6 +1041,38 @@ export class AgentClient {
         }
     }
 
+    async postMultipart(endpoint, form, apiToken) {
+        let response;
+        try {
+            response = await this.fetch(endpoint, {
+                method: 'POST',
+                headers: { Accept: 'application/json', Authorization: `Bearer ${apiToken}` },
+                body: form,
+                redirect: 'manual',
+                signal: AbortSignal.timeout(30_000),
+            });
+        } catch {
+            throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
+        }
+        if (![201, 401, 403, 422, 429].includes(response.status)) {
+            throw new Error(`MyCompanies devolvió un error HTTP ${response.status}.`);
+        }
+        if (response.status !== 201) return { status: response.status, body: {} };
+        let responseText;
+        try {
+            responseText = await readResponseLimited(response, MAX_RESPONSE_BYTES);
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta demasiado grande o no válida.');
+        }
+        try {
+            const body = JSON.parse(responseText);
+            if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid response shape.');
+            return { status: response.status, body };
+        } catch {
+            throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
+        }
+    }
+
     async patchJson(endpoint, payload, apiToken) {
         let response;
         try {
@@ -973,6 +1165,29 @@ export class AgentClient {
             throw new Error('MyCompanies devolvió una respuesta JSON no válida.');
         }
     }
+
+    async getBinary(endpoint, apiToken) {
+        let response;
+        try {
+            response = await this.fetch(endpoint, {
+                method: 'GET',
+                headers: { Accept: 'application/octet-stream', Authorization: `Bearer ${apiToken}` },
+                redirect: 'manual',
+                signal: AbortSignal.timeout(30_000),
+            });
+        } catch {
+            throw new Error('No se pudo conectar con MyCompanies. Comprueba la URL y la red.');
+        }
+        if (response.status !== 200) {
+            if ([401, 403, 404, 429].includes(response.status)) return { status: response.status, bytes: Buffer.alloc(0) };
+            throw new Error(`MyCompanies devolvió un error HTTP ${response.status}.`);
+        }
+        try {
+            return { status: response.status, bytes: await readResponseBytesLimited(response, MAX_ARTIFACT_BYTES) };
+        } catch {
+            throw new Error('MyCompanies devolvió un informe demasiado grande o no válido.');
+        }
+    }
 }
 
 function isRunnerTask(task, includeDescription = false) {
@@ -1027,6 +1242,32 @@ function isAgentOfferSummary(offer) {
         && ['product', 'service'].includes(offer.type)
         && ['preparing', 'available', 'withdrawn'].includes(offer.status)
         && (offer.bet_id === null || Number.isInteger(offer.bet_id));
+}
+
+function isArtifactSummary(artifact) {
+    return artifact !== null
+        && typeof artifact === 'object'
+        && Number.isSafeInteger(artifact.id)
+        && artifact.id > 0
+        && typeof artifact.title === 'string'
+        && (artifact.description === null || typeof artifact.description === 'string')
+        && (artifact.source === null || typeof artifact.source === 'string')
+        && typeof artifact.original_filename === 'string'
+        && ['text/plain', 'text/markdown', 'application/pdf'].includes(artifact.mime_type)
+        && Number.isSafeInteger(artifact.size_bytes)
+        && artifact.size_bytes > 0
+        && /^[a-f0-9]{64}$/.test(artifact.sha256)
+        && typeof artifact.created_at === 'string'
+        && (artifact.uploaded_by === null
+            || (typeof artifact.uploaded_by === 'object'
+                && artifact.uploaded_by.type === 'agent'
+                && Number.isSafeInteger(artifact.uploaded_by.id)
+                && typeof artifact.uploaded_by.name === 'string'));
+}
+
+function isPathInside(directoryPath, targetPath) {
+    const relativePath = relative(directoryPath, targetPath);
+    return relativePath === '' || (!relativePath.startsWith(`..${sep}`) && relativePath !== '..' && !relativePath.startsWith(sep));
 }
 
 function isAgentOffer(offer) {
@@ -1137,6 +1378,21 @@ async function readResponseLimited(response, maximumBytes) {
         offset += chunk.byteLength;
     }
     return new TextDecoder().decode(combined);
+}
+
+async function readResponseBytesLimited(response, maximumBytes) {
+    if (response.body === null) throw new Error('Missing response body.');
+    const reader = response.body.getReader();
+    const chunks = [];
+    let totalBytes = 0;
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > maximumBytes) throw new Error('Response exceeded size limit.');
+        chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks, totalBytes);
 }
 
 async function validateCompanyRootPath(companyRootPath) {

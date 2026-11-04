@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseArtifactDownloadOptions, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -69,6 +69,20 @@ test('agent offer status accepts only supported lifecycle states', () => {
     assert.deepEqual(parseAgentOfferStatusOptions(['25', 'available']), { offerId: 25, status: 'available' });
     assert.throws(() => parseAgentOfferStatusOptions(['25', 'converted']), /estado no es válido/);
     assert.throws(() => parseAgentOfferStatusOptions(['0', 'available']), /entero positivo/);
+});
+
+test('artifact publish and download require explicit paths and valid metadata', () => {
+    assert.deepEqual(parseArtifactPublishOptions([
+        'reports/daily.md', '--title=Informe diario', '--description=Resumen de mercado.', '--source=market-script',
+    ]), {
+        filePath: 'reports/daily.md',
+        metadata: { title: 'Informe diario', description: 'Resumen de mercado.', source: 'market-script' },
+    });
+    assert.throws(() => parseArtifactPublishOptions(['reports/daily.md']), /title/);
+    assert.throws(() => parseArtifactPublishOptions(['reports/daily.md', '--title=Informe', '--unknown=x']), /Opción desconocida/);
+    assert.deepEqual(parseArtifactListOptions(['--after=12']), { afterId: 12 });
+    assert.deepEqual(parseArtifactDownloadOptions(['42', '--output=reports/shared.md']), { artifactId: 42, outputPath: 'reports/shared.md' });
+    assert.throws(() => parseArtifactDownloadOptions(['42']), /output/);
 });
 
 test('agent bet evidence command requires valid evidence fields and an HTTP source URL', () => {
@@ -176,6 +190,9 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent offers/);
     assert.match(output.value, /mycompany agent offer ID/);
     assert.match(output.value, /mycompany agent offer status ID ESTADO/);
+    assert.match(output.value, /mycompany artifact publish FILE/);
+    assert.match(output.value, /mycompany artifacts/);
+    assert.match(output.value, /mycompany artifact download ID --output=FILE/);
     assert.match(output.value, /mycompany agent task ID/);
     assert.match(output.value, /mycompany agent task status ID ESTADO/);
     assert.match(output.value, /mycompany agent task create/);

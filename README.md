@@ -60,6 +60,18 @@ When no responsible identity is assigned, the CLI prints `responsable sin asigna
 
 `mycompany task ID` shows the description, responsible identity, and details for one active task, if its workspace is currently assigned to the selected Runner. The endpoint returns `404` for tasks outside that scope, completed tasks, and unknown IDs. The command prints the text for a person to review; it does not interpret or execute it.
 
+## Publish and retrieve company reports
+
+An Agent with `artifacts.publish` can publish one explicitly selected report from the company folder. The server stores a private copy; the source file remains local:
+
+```sh
+mycompany artifact publish reports/daily.md --title="Informe diario" --source="daily-report"
+mycompany artifacts
+mycompany artifact download 42 --output=reports/shared-copy.md
+```
+
+Only `.md`, `.txt`, and `.pdf` files up to 10 MiB are accepted. The CLI rejects symlinks and paths outside the selected company root. Downloads must target a new path under that root and are created with owner-only file permissions on Unix. `artifacts.read` allows listing and downloading; `artifacts.publish` also includes read access. Human company members can browse and download the same reports in the web app. The feature publishes individual files; it does not sync folders, run schedules, or execute scripts.
+
 ## Codex and Claude Code in a company folder
 
 You can start Codex or Claude Code manually from a company root after reviewing that company's `AGENTS.md` or `CLAUDE.md`. The CLI can separately authenticate as a MyCompanies Agent and show its server identity and active grants. It does not launch an assistant or execute Agent tasks. A profile's title and local instructions do not grant API permissions. Every future connected action must enforce its capability and scope on the server and record its actor.
@@ -102,7 +114,7 @@ On Linux and macOS, the directory is restricted to mode `0700` and files to `060
 
 This release supports one-time enrollment, manual heartbeat, a fixed read-only workspace check, and read-only task listing/detail. It does not poll, access repositories, run scripts, or execute code received from the server. It opens no inbound ports. Runner credentials are revocable from MyCompanies; local workspace paths and tool secrets are not uploaded. HTTP redirects are not followed, response size is bounded, and error messages avoid returning response bodies or credentials.
 
-The Agent CLI currently validates credentials, reads identity/grants, lists scoped active tasks, creates/edits tasks, changes task and offer status, assigns tasks to agents, reads company bets/evidence and offers, records bet evidence with `bets.manage`, changes bet status with `bets.status.manage`, and converts validated bets with `offers.manage`. Launching an AI assistant is unavailable.
+The Agent CLI currently validates credentials, reads identity/grants, lists scoped active tasks, creates/edits tasks, changes task and offer status, assigns tasks to agents, reads company bets/evidence and offers, records bet evidence with `bets.manage`, changes bet status with `bets.status.manage`, converts validated bets with `offers.manage`, and publishes/lists/downloads company reports with the artifact grants. Launching an AI assistant is unavailable.
 
 The server-side contract and future execution boundaries are documented in [MyCompanies' Runner protocol](https://github.com/PabloTheBlink/mycompanies/blob/main/docs/runner-protocol.md).
 

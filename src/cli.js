@@ -20,6 +20,42 @@ export async function run(argumentsList, streams = process, currentDirectory = p
         return 0;
     }
 
+    if (command === 'artifacts' || command === 'artifact') {
+        const agentClient = new AgentClient(new ConfigStore());
+        if (command === 'artifacts') {
+            const options = parseArtifactListOptions(argumentsAfterCommand);
+            const result = await agentClient.listArtifacts(currentDirectory, options.afterId);
+            if (result.artifacts.length === 0) {
+                streams.stdout.write('No hay informes compartidos para esta empresa.\n');
+                return 0;
+            }
+            streams.stdout.write(`Informes compartidos (${result.artifacts.length}):\n`);
+            for (const artifact of result.artifacts) {
+                const size = `${(artifact.size_bytes / 1024).toFixed(1)} KB`;
+                streams.stdout.write(`#${artifact.id} ${safeTerminalText(artifact.title)} · ${safeTerminalText(artifact.original_filename)} · ${size}\n`);
+            }
+            if (result.has_more) {
+                streams.stdout.write(`Hay más informes. Continúa con: mycompany artifacts --after=${result.next_after}\n`);
+            }
+            return 0;
+        }
+
+        const [artifactCommand, ...artifactArguments] = argumentsAfterCommand;
+        if (artifactCommand === 'publish') {
+            const options = parseArtifactPublishOptions(artifactArguments);
+            const artifact = await agentClient.publishArtifact(options.filePath, options.metadata, currentDirectory);
+            streams.stdout.write(`Informe #${artifact.id} publicado para ${safeTerminalText(artifact.title)} (${safeTerminalText(artifact.original_filename)}).\n`);
+            return 0;
+        }
+        if (artifactCommand === 'download') {
+            const options = parseArtifactDownloadOptions(artifactArguments);
+            const result = await agentClient.downloadArtifact(options.artifactId, options.outputPath, currentDirectory);
+            streams.stdout.write(`Informe #${options.artifactId} descargado en ${safeTerminalText(result.outputPath)}.\n`);
+            return 0;
+        }
+        throw new Error('Uso: mycompany artifact publish FILE --title=TEXTO | mycompany artifact download ID --output=FILE.');
+    }
+
     const configStore = new ConfigStore();
     const client = new RunnerClient(configStore);
 
@@ -372,6 +408,55 @@ export function parseAgentOfferStatusOptions(argumentsList) {
     return { offerId: parseTaskId(offerId), status };
 }
 
+export function parseArtifactPublishOptions(argumentsList) {
+    if (argumentsList.length < 2 || argumentsList[0].startsWith('--')) {
+        throw new Error('Uso: mycompany artifact publish FILE --title=TEXTO [--description=TEXTO] [--source=TEXTO].');
+    }
+    const filePath = argumentsList[0];
+    const fields = new Set(['title', 'description', 'source']);
+    const metadata = {};
+    for (const argument of argumentsList.slice(1)) {
+        const separator = argument.indexOf('=');
+        if (!argument.startsWith('--') || separator < 3) throw new Error('Usa opciones con formato --nombre=valor.');
+        const key = argument.slice(2, separator);
+        const value = argument.slice(separator + 1);
+        if (!fields.has(key) || value === '' || Object.hasOwn(metadata, key)) {
+            throw new Error('Opción desconocida, vacía o repetida para publicar un informe.');
+        }
+        metadata[key] = value;
+    }
+    if (typeof metadata.title !== 'string' || metadata.title.length > 160) {
+        throw new Error('El título es obligatorio y admite hasta 160 caracteres.');
+    }
+    if (metadata.description !== undefined && metadata.description.length > 2000) {
+        throw new Error('La descripción admite hasta 2000 caracteres.');
+    }
+    if (metadata.source !== undefined && metadata.source.length > 160) {
+        throw new Error('El origen admite hasta 160 caracteres.');
+    }
+
+    return { filePath, metadata };
+}
+
+export function parseArtifactListOptions(argumentsList) {
+    if (argumentsList.length === 0) return { afterId: null };
+    if (argumentsList.length !== 1) throw new Error('Opción desconocida o repetida para artifacts. Usa --after=ID.');
+    const match = /^--after=(.+)$/.exec(argumentsList[0]);
+    if (match === null) throw new Error('Opción desconocida para artifacts. Usa --after=ID.');
+    return { afterId: parseTaskId(match[1]) };
+}
+
+export function parseArtifactDownloadOptions(argumentsList) {
+    if (argumentsList.length !== 2 || !argumentsList[1].startsWith('--output=')) {
+        throw new Error('Uso: mycompany artifact download ID --output=FILE.');
+    }
+    const artifactId = parseTaskId(argumentsList[0]);
+    const outputPath = argumentsList[1].slice('--output='.length);
+    if (outputPath === '') throw new Error('Indica la ruta de salida con --output=FILE.');
+
+    return { artifactId, outputPath };
+}
+
 export function parseAgentBetEvidenceOptions(argumentsList) {
     if (argumentsList.length < 4) {
         throw new Error('Uso: mycompany agent bet evidence ID --title=TEXTO --details=TEXTO --assessment=supports|challenges|neutral [--source-url=URL].');
@@ -637,6 +722,12 @@ function printHelp(stdout) {
     stdout.write('    Muestra los detalles de una oferta permitida, incluida su apuesta de origen.\n');
     stdout.write('  mycompany agent offer status ID ESTADO\n');
     stdout.write('    Cambia el estado con offers.manage y registra al agente en el historial.\n');
+    stdout.write('  mycompany artifact publish FILE --title=TEXTO [--description=TEXTO] [--source=TEXTO]\n');
+    stdout.write('    Publica un archivo .md, .txt o .pdf seleccionado en la carpeta de empresa con artifacts.publish.\n');
+    stdout.write('  mycompany artifacts [--after=ID]\n');
+    stdout.write('    Lista informes compartidos; artifacts.publish incluye lectura y artifacts.read permite consultarlos.\n');
+    stdout.write('  mycompany artifact download ID --output=FILE\n');
+    stdout.write('    Descarga un informe con artifacts.read a una nueva ruta dentro de la carpeta de empresa.\n');
     stdout.write('  mycompany agent bet ID\n');
     stdout.write('    Muestra hipótesis, descripción y evidencias de una apuesta permitida, como texto sin ejecutarlas.\n');
     stdout.write('  mycompany agent bet evidence ID --title=TEXTO --details=TEXTO --assessment=supports|challenges|neutral [--source-url=URL]\n');
