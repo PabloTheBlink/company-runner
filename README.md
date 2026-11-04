@@ -111,6 +111,8 @@ mycompany agent create --name="Directora marketing" --role=Marketing --instructi
 mycompany agent permissions
 mycompany agent pause 26
 mycompany agent resume 26
+mycompany agent edit 26 --role="Marketing lead" --instructions="Prioriza datos verificables."
+mycompany agent edit 26 --instructions=none
 mycompany agent permission grant 26 tasks.read --workspace-id=8
 mycompany agent permission revoke 26 91
 mycompany agent forget
@@ -120,6 +122,7 @@ mycompany agent forget
 
 `agent permissions` retrieves the current permission catalogue from the authenticated server, including human-readable labels and whether each capability supports Workspace scope. It is read-only and does not show which grants this Agent currently holds; use `agent me` for that.
 `agent pause AGENT_ID` and `agent resume AGENT_ID` require `agents.manage` and affect only an active direct report in the same company. Pausing revokes permissions delegated by that report to lower levels, records the acting Agent, and leaves the report's own grants intact. Resuming does not restore revoked descendant grants. Repeating the current state is harmless and does not create another history entry.
+`agent edit AGENT_ID [--role=ROL] [--instructions=TEXTO]` also requires `agents.manage` and changes only those two profile fields on a direct report. Use `none` to clear a field. It cannot change name, hierarchy, status, permissions, or credentials. The API response omits instructions; the audit history records changed field names and actor, not prompt contents. Repeating the same values creates no duplicate history.
 
 ## Credential storage
 

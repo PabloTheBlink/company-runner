@@ -110,6 +110,14 @@ export async function run(argumentsList, streams = process, currentDirectory = p
             streams.stdout.write('\n');
             return 0;
         }
+        if (agentCommand === 'edit') {
+            const { agentId, changes } = parseAgentProfileEditOptions(agentArguments);
+            const result = await agentClient.updateAgentProfile(agentId, changes, currentDirectory);
+            streams.stdout.write(result.changed
+                ? `Perfil del agente #${result.agent.id} actualizado (${result.changed_fields.join(', ')}).\n`
+                : `El perfil del agente #${result.agent.id} ya tenía esos valores.\n`);
+            return 0;
+        }
         if (agentCommand === 'tasks') {
             const options = parseAgentTasksOptions(agentArguments);
             const result = await agentClient.listTasks(currentDirectory, options.afterId);
@@ -636,6 +644,30 @@ export function parseAgentProfileId(argumentsList) {
     return reportId;
 }
 
+export function parseAgentProfileEditOptions(argumentsList) {
+    if (argumentsList.length === 0) {
+        throw new Error('Uso: mycompany agent edit AGENT_ID [--role=ROL] [--instructions=TEXTO].');
+    }
+    const agentId = parseTaskId(argumentsList[0]);
+    if (argumentsList.length === 1) throw new Error('Indica al menos un campo: --role o --instructions.');
+    const changes = {};
+    for (const argument of argumentsList.slice(1)) {
+        const separator = argument.indexOf('=');
+        if (!argument.startsWith('--') || separator < 3) throw new Error('Usa opciones con formato --campo=valor.');
+        const field = argument.slice(2, separator);
+        const value = argument.slice(separator + 1);
+        if (!['role', 'instructions'].includes(field) || Object.hasOwn(changes, field)) {
+            throw new Error('Opción desconocida o repetida para agent edit.');
+        }
+        if (value === '') throw new Error(`El valor de ${field} está vacío; usa none para borrarlo.`);
+        changes[field] = value === 'none' ? null : value;
+    }
+
+    if (Object.keys(changes).length === 0) throw new Error('Indica al menos un campo: --role o --instructions.');
+
+    return { agentId, changes };
+}
+
 export function parseAgentPermissionRevokeOptions(argumentsList) {
     if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent permission revoke AGENT_ID GRANT_ID.');
     return { agentId: parseTaskId(argumentsList[0]), grantId: parseTaskId(argumentsList[1]) };
@@ -985,6 +1017,8 @@ function printHelp(stdout) {
     stdout.write('    Consulta el catálogo vigente de capacidades y los alcances que admiten.\n');
     stdout.write('  mycompany agent pause AGENT_ID | resume AGENT_ID\n');
     stdout.write('    Pausa o reactiva un reporte directo con agents.manage; pausar revoca sus permisos delegados descendientes.\n');
+    stdout.write('  mycompany agent edit AGENT_ID [--role=ROL] [--instructions=TEXTO]\n');
+    stdout.write('    Actualiza solo rol e instrucciones de un reporte directo; usa none para borrar uno de esos campos. Requiere agents.manage.\n');
     stdout.write('  mycompany agent tasks [--after=ID]\n');
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');

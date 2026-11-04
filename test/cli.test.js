@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
@@ -138,6 +138,19 @@ test('agent pause and resume commands require a single direct report ID', () => 
     assert.throws(() => parseAgentProfileId([]), /Uso:/);
     assert.throws(() => parseAgentProfileId(['0']), /entero positivo/);
     assert.throws(() => parseAgentProfileId(['26', '27']), /Uso:/);
+});
+
+test('agent profile edit accepts only role and instructions and can clear either field', () => {
+    assert.deepEqual(parseAgentProfileEditOptions(['26', '--role=Marketing lead', '--instructions=Prioriza datos verificables.']), {
+        agentId: 26,
+        changes: { role: 'Marketing lead', instructions: 'Prioriza datos verificables.' },
+    });
+    assert.deepEqual(parseAgentProfileEditOptions(['26', '--instructions=none']), {
+        agentId: 26,
+        changes: { instructions: null },
+    });
+    assert.throws(() => parseAgentProfileEditOptions(['26']), /al menos un campo/);
+    assert.throws(() => parseAgentProfileEditOptions(['26', '--status=paused']), /Opción desconocida/);
 });
 
 test('agent offer status accepts only supported lifecycle states', () => {

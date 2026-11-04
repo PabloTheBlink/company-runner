@@ -886,6 +886,63 @@ export class AgentClient {
         return response.body;
     }
 
+    async updateAgentProfile(agentId, changes, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(agentId) || agentId < 1) throw new Error('El ID de agente debe ser un entero positivo.');
+        if (changes === null || typeof changes !== 'object' || Array.isArray(changes)) {
+            throw new Error('Indica el rol o las instrucciones que quieres cambiar.');
+        }
+        const allowedFields = new Set(['role', 'instructions']);
+        if (Object.keys(changes).length === 0 || Object.keys(changes).some((field) => !allowedFields.has(field))) {
+            throw new Error('Solo se pueden editar role e instructions y debes indicar al menos uno.');
+        }
+        if (Object.hasOwn(changes, 'role') && changes.role !== null
+            && (typeof changes.role !== 'string' || changes.role.trim() === '' || changes.role.length > 120)) {
+            throw new Error('El rol debe ser texto no vacío de hasta 120 caracteres o null.');
+        }
+        if (Object.hasOwn(changes, 'instructions') && changes.instructions !== null
+            && (typeof changes.instructions !== 'string' || changes.instructions.trim() === '' || changes.instructions.length > 10000)) {
+            throw new Error('Las instrucciones deben ser texto no vacío de hasta 10.000 caracteres o null.');
+        }
+
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.patchJson(
+            `${serverUrl}/api/v1/agent/agents/${agentId}`,
+            changes,
+            configuration.api_token,
+        );
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita agents.manage para editar perfiles de reportes directos (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('El destino no es un reporte directo de esta empresa (HTTP 404).');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó la edición del perfil (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        const agent = response.body.agent;
+        if (response.status !== 200
+            || !Number.isSafeInteger(agent?.id)
+            || agent.id !== agentId
+            || typeof agent.name !== 'string'
+            || !(agent.role === null || typeof agent.role === 'string')
+            || Object.hasOwn(agent, 'instructions')
+            || !Array.isArray(response.body.changed_fields)
+            || response.body.changed_fields.some((field) => !['role', 'instructions'].includes(field))
+            || typeof response.body.changed !== 'boolean'
+            || response.body.changed !== (response.body.changed_fields.length > 0)) {
+            throw new Error('MyCompanies devolvió una respuesta de edición de perfil no válida.');
+        }
+
+        return response.body;
+    }
+
     async createAgent(agentData, currentDirectory = process.cwd()) {
         if (agentData === null || typeof agentData !== 'object' || Array.isArray(agentData)) {
             throw new Error('Indica un nombre para el nuevo agente.');
