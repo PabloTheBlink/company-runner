@@ -538,6 +538,57 @@ export class AgentClient {
         return bet;
     }
 
+    async convertBet(betId, type, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(betId) || betId < 1) {
+            throw new Error('El ID de apuesta debe ser un entero positivo.');
+        }
+        if (!['product', 'service'].includes(type)) {
+            throw new Error('El tipo de oferta debe ser producto o servicio.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(
+            `${serverUrl}/api/v1/agent/bets/${betId}/conversion`,
+            { type },
+            configuration.api_token,
+        );
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita offers.manage para convertir una apuesta (HTTP 403).');
+        }
+        if (response.status === 404) {
+            throw new Error('La apuesta no existe o no pertenece a la empresa de este agente.');
+        }
+        if (response.status === 409) {
+            throw new Error('La apuesta debe estar validada antes de convertirse en oferta (HTTP 409).');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó el tipo de oferta solicitado (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        const offer = response.body.offer;
+        if (![200, 201].includes(response.status)
+            || !Number.isSafeInteger(offer?.id)
+            || offer.bet_id !== betId
+            || typeof offer.name !== 'string'
+            || !['product', 'service'].includes(offer.type)
+            || !['preparing', 'available', 'withdrawn'].includes(offer.status)
+            || (offer.created_by !== null
+                && (offer.created_by?.type !== 'agent' && offer.created_by?.type !== 'user'
+                    || !Number.isSafeInteger(offer.created_by.id)
+                    || typeof offer.created_by.name !== 'string'))
+            || response.body.bet?.id !== betId
+            || response.body.bet.status !== 'converted'
+            || typeof response.body.bet.changed !== 'boolean') {
+            throw new Error('MyCompanies devolvió una respuesta de conversión de apuesta no válida.');
+        }
+        return response.body;
+    }
+
     async editTask(taskId, changes, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(taskId) || taskId < 1) {
             throw new Error('El ID de tarea debe ser un entero positivo.');

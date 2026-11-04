@@ -93,6 +93,14 @@ export async function run(argumentsList, streams = process, currentDirectory = p
                 : `Apuesta #${result.id}: ya estaba en estado ${status}; no se añadió historial.\n`);
             return 0;
         }
+        if (agentCommand === 'bet' && agentArguments[0] === 'convert') {
+            const options = parseAgentBetConversionOptions(agentArguments.slice(1));
+            const result = await agentClient.convertBet(options.betId, options.type, currentDirectory);
+            streams.stdout.write(result.bet.changed
+                ? `Apuesta #${options.betId} convertida en oferta ${result.offer.type === 'product' ? 'producto' : 'servicio'}: ${safeTerminalText(result.offer.name)}.\n`
+                : `Apuesta #${options.betId} ya estaba convertida en oferta: ${safeTerminalText(result.offer.name)}.\n`);
+            return 0;
+        }
         if (agentCommand === 'bet' && agentArguments.length === 1) {
             const bet = await agentClient.getBet(parseTaskId(agentArguments[0]), currentDirectory);
             const status = { proposed: 'propuesta', investigating: 'investigando', validated: 'validada', discarded: 'descartada', converted: 'convertida', archived: 'archivada' }[bet.status];
@@ -349,6 +357,15 @@ export function parseAgentBetStatusOptions(argumentsList) {
     return { betId: parseTaskId(betId), status };
 }
 
+export function parseAgentBetConversionOptions(argumentsList) {
+    if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent bet convert ID --type=product|service.');
+    const betId = parseTaskId(argumentsList[0]);
+    const match = /^--type=(product|service)$/.exec(argumentsList[1]);
+    if (match === null) throw new Error('El tipo de oferta debe ser producto o servicio (--type=product|service).');
+
+    return { betId, type: match[1] };
+}
+
 export function parseAgentStatusOptions(argumentsList) {
     if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent task status ID ESTADO.');
     const [taskId, status] = argumentsList;
@@ -556,6 +573,8 @@ function printHelp(stdout) {
     stdout.write('    Registra una observación en la apuesta con bets.manage y conserva el agente que la aportó. No cambia el estado de la apuesta.\n');
     stdout.write('  mycompany agent bet status ID ESTADO\n');
     stdout.write('    Cambia el estado con bets.status.manage y registra el agente en el historial. La conversión en oferta es una operación separada.\n');
+    stdout.write('  mycompany agent bet convert ID --type=product|service\n');
+    stdout.write('    Convierte una apuesta validada en oferta con offers.manage; conserva el agente en ambos historiales.\n');
     stdout.write('  mycompany agent task ID\n');
     stdout.write('    Consulta una tarea activa dentro del ámbito Agent y muestra descripción y detalles como texto. No interpreta instrucciones.\n');
     stdout.write('  mycompany agent task status ID ESTADO\n');

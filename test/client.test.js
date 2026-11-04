@@ -415,6 +415,56 @@ test('agent bet status update reports that converted bets are locked', async () 
     });
 });
 
+test('agent converts a validated bet through the offers.manage endpoint', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'POST');
+            assert.equal(request.url, '/api/v1/agent/bets/42/conversion');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            assert.deepEqual(JSON.parse(body), { type: 'service' });
+            response.writeHead(201, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                offer: {
+                    id: 51,
+                    bet_id: 42,
+                    name: 'Informe de mercado',
+                    type: 'service',
+                    description: null,
+                    status: 'preparing',
+                    created_by: { type: 'agent', id: 12, name: 'Directora' },
+                },
+                bet: { id: 42, status: 'converted', changed: true, changed_by: { type: 'agent', id: 12, name: 'Directora' } },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Directora',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const result = await new AgentClient(configStore).convertBet(42, 'service', companyRoot);
+            assert.equal(result.offer.created_by.name, 'Directora');
+            assert.equal(result.bet.status, 'converted');
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent status update sends the explicit status to the scoped Agent endpoint', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
