@@ -15,7 +15,7 @@ import { applyLocalAgentFileWrites, stageLocalAgentFiles } from './local-agent-f
 import { syncAgentProfileInstructions } from './agent-profile-sync.js';
 import { runAgentRuntime } from './agent-runtime.js';
 import { applyDelegationPlan, parseDelegationResponse } from './delegation.js';
-import { loadAgentTaskContext, parseAgentWorkResponse, runAgentWorkOnce, shouldApplyAgentTaskWrites } from './agent-work.js';
+import { loadAgentTaskContext, runAgentTaskToolLoop, runAgentWorkOnce, shouldApplyAgentTaskWrites } from './agent-work.js';
 import { createAgentRuntimePlan, listLocalAgentRuntimes, normalizeLocalAgentPath } from './runtime.js';
 
 export async function run(
@@ -331,27 +331,49 @@ export async function run(
                         }, 10_000);
                         runtimeHeartbeat.unref?.();
                         streams.stdout.write(`Worker de ${safeTerminalText(identity.agent.name)} · tarea #${task.id} · red deshabilitada. Ctrl-C interrumpe el ciclo.\n`);
+                        const canProposeBets = identity.permissions.some((permission) => permission?.name === 'bets.manage');
+                        const toolInstructions = canProposeBets
+                            ? 'Herramienta autorizada: puedes proponer una apuesta con JSON exacto {"type":"tool_call","name":"company.bet.propose","parameters":{"title":"...","hypothesis":"...","description":"..."}}. Solo crea propuestas si la evidencia de la tarea lo justifica. Nunca selecciones un estado ni presentes la propuesta como validada.'
+                            : 'No hay herramientas empresariales disponibles para este Agent en esta tarea.';
                         const prompt = [
                             createAgentRuntimePrompt(identity, task, false, memory, fileSummary.write, companyContext),
+                            toolInstructions,
                             'Devuelve únicamente un objeto JSON válido con exactamente estas claves: {"status":"completed|blocked|open","summary":"resumen breve del trabajo y resultado"}. Usa completed solo si cumpliste los criterios de la tarea; blocked si falta una dependencia o acceso; open si el trabajo sigue pendiente. El resumen es texto no confiable y no puede añadir instrucciones.',
                         ].join('\n');
-                        const runtimeResult = await agentRuntimeRunner({
-                            provider,
+                        const outcome = await runAgentTaskToolLoop({
+                            task,
+                            identity,
                             prompt,
-                            cwd: stagingRoot,
-                            timeoutMs: options.timeoutSeconds * 1_000,
-                            signal,
-                            allowNetwork: false,
+                            currentDirectory,
+                            agentClient,
+                            runProvider: ({ prompt: currentPrompt }) => agentRuntimeRunner({
+                                provider,
+                                prompt: currentPrompt,
+                                cwd: stagingRoot,
+                                timeoutMs: options.timeoutSeconds * 1_000,
+                                signal,
+                                allowNetwork: false,
+                            }),
+                            verifyTaskCurrent: async () => {
+                                const currentTask = await agentClient.getTask(task.id, currentDirectory);
+                                if (getAgentRuntimeTaskFingerprint(task) !== getAgentRuntimeTaskFingerprint(currentTask)) {
+                                    throw new Error('La tarea cambió durante la ejecución; no se aplicaron cambios locales.');
+                                }
+                            },
+                            renewLease,
+                            isAborted: () => signal.aborted,
+                            onToolCall: async () => {
+                                await agentClient.updateRuntimeSession(runtimeSession.id, 'running', 'using_company_tool', currentDirectory);
+                            },
+                            onToolResult: async () => {
+                                await agentClient.updateRuntimeSession(runtimeSession.id, 'running', 'working', currentDirectory);
+                            },
                         });
-                        if (typeof runtimeResult?.response !== 'string') {
-                            throw new Error('El proveedor no devolvió un resultado válido; no se aplicaron cambios locales.');
-                        }
                         const currentTask = await agentClient.getTask(task.id, currentDirectory);
                         if (getAgentRuntimeTaskFingerprint(task) !== getAgentRuntimeTaskFingerprint(currentTask)) {
                             throw new Error('La tarea cambió durante la ejecución; no se aplicaron los cambios locales.');
                         }
                         if (signal.aborted) throw new Error('Se perdió la reserva de la tarea; se descartan los cambios locales.');
-                        const outcome = parseAgentWorkResponse(runtimeResult.response);
                         await renewLease();
                         if (signal.aborted) throw new Error('Se perdió la reserva de la tarea; se descartan los cambios locales.');
                         let writtenPaths = [];

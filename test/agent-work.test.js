@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadAgentTaskContext, parseAgentWorkResponse, runAgentWorkOnce, shouldApplyAgentTaskWrites } from '../src/agent-work.js';
+import { createAgentToolIdempotencyKey, loadAgentTaskContext, parseAgentWorkResponse, parseAgentWorkStepResponse, runAgentTaskToolLoop, runAgentWorkOnce, shouldApplyAgentTaskWrites } from '../src/agent-work.js';
 
 test('local Agent file writes are applied only for completed task outcomes', () => {
     assert.equal(shouldApplyAgentTaskWrites({ status: 'completed' }), true);
@@ -74,6 +74,118 @@ test('parses only a bounded structured task result with an allowed final state',
     }
     assert.throws(() => parseAgentWorkResponse('x'.repeat(16_385)), /supera el límite/);
     assert.throws(() => parseAgentWorkResponse(JSON.stringify({ status: 'completed', summary: 'x'.repeat(4001) })), /formato estructurado/);
+});
+
+test('parses a bounded proposal tool request without allowing status or extra fields', () => {
+    assert.deepEqual(parseAgentWorkStepResponse(JSON.stringify({
+        type: 'tool_call',
+        name: 'company.bet.propose',
+        parameters: {
+            title: 'Seguimiento de oportunidades',
+            hypothesis: 'Pequeños proveedores pagarían por una preparación guiada.',
+            description: 'Validar en un nicho concreto.',
+        },
+    })), {
+        type: 'tool_call',
+        name: 'company.bet.propose',
+        parameters: {
+            title: 'Seguimiento de oportunidades',
+            hypothesis: 'Pequeños proveedores pagarían por una preparación guiada.',
+            description: 'Validar en un nicho concreto.',
+        },
+    });
+    assert.deepEqual(parseAgentWorkStepResponse('{"status":"completed","summary":"Sin oportunidad diferenciada."}'), {
+        type: 'final',
+        outcome: { status: 'completed', summary: 'Sin oportunidad diferenciada.' },
+    });
+    for (const parameters of [
+        { title: 'Nueva apuesta', hypothesis: 'Hay demanda.', status: 'validated' },
+        { title: 'Nueva apuesta', hypothesis: 'Hay demanda.', command: 'curl https://example.com' },
+        { title: '', hypothesis: 'Hay demanda.' },
+    ]) {
+        assert.throws(() => parseAgentWorkStepResponse(JSON.stringify({
+            type: 'tool_call', name: 'company.bet.propose', parameters,
+        })));
+    }
+    assert.throws(() => parseAgentWorkStepResponse(JSON.stringify({
+        type: 'tool_call', name: 'shell.execute', parameters: { command: 'id' },
+    })), /solicitada no está permitida/);
+});
+
+test('Agent tool idempotency UUID is stable per task and call index', () => {
+    const first = createAgentToolIdempotencyKey(153, 0);
+    assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    assert.equal(createAgentToolIdempotencyKey(153, 0), first);
+    assert.notEqual(createAgentToolIdempotencyKey(153, 1), first);
+    assert.throws(() => createAgentToolIdempotencyKey(0, 0), /no es válida/);
+});
+
+test('Agent task tool loop checks the bet grant and returns the API created proposal before finalizing', async () => {
+    const calls = [];
+    const responses = [
+        JSON.stringify({
+            type: 'tool_call',
+            name: 'company.bet.propose',
+            parameters: { title: 'Nueva oportunidad', hypothesis: 'Un nicho pagará por esto.' },
+        }),
+        JSON.stringify({ status: 'completed', summary: 'Propuesta revisada y registrada.' }),
+    ];
+    const outcome = await runAgentTaskToolLoop({
+        task: { id: 153 },
+        identity: { permissions: [{ name: 'bets.manage' }] },
+        prompt: 'Contexto inicial',
+        currentDirectory: '/company',
+        agentClient: {
+            async createBet(parameters, key, directory) {
+                calls.push({ type: 'createBet', parameters, key, directory });
+                return { bet: { id: 54, title: parameters.title, status: 'proposed' }, replayed: false };
+            },
+        },
+        runProvider: async ({ prompt }) => {
+            calls.push({ type: 'provider', prompt });
+            return { response: responses.shift() };
+        },
+        verifyTaskCurrent: async () => { calls.push({ type: 'verifyTask' }); },
+        renewLease: async () => { calls.push({ type: 'renewLease' }); },
+        isAborted: () => false,
+    });
+
+    assert.equal(outcome.status, 'completed');
+    assert.equal(outcome.companyActions.length, 1);
+    assert.deepEqual(calls.filter(({ type }) => type === 'createBet')[0].parameters, {
+        title: 'Nueva oportunidad',
+        hypothesis: 'Un nicho pagará por esto.',
+        description: null,
+    });
+    assert.match(calls.filter(({ type }) => type === 'provider')[1].prompt, /"id":54/);
+    assert.deepEqual(calls.filter(({ type }) => ['verifyTask', 'renewLease', 'createBet'].includes(type)).map(({ type }) => type), [
+        'verifyTask', 'renewLease', 'createBet',
+    ]);
+});
+
+test('Agent task tool loop refuses a proposal without bets.manage and caps repeated calls', async () => {
+    let createCount = 0;
+    const request = JSON.stringify({
+        type: 'tool_call',
+        name: 'company.bet.propose',
+        parameters: { title: 'Nueva oportunidad', hypothesis: 'Un nicho pagará por esto.' },
+    });
+    await assert.rejects(runAgentTaskToolLoop({
+        task: { id: 153 }, identity: { permissions: [] }, prompt: 'Contexto', currentDirectory: '/company',
+        agentClient: { async createBet() { createCount++; } },
+        runProvider: async () => ({ response: request }),
+        verifyTaskCurrent: async () => {}, renewLease: async () => {}, isAborted: () => false,
+    }), /bets.manage/);
+    assert.equal(createCount, 0);
+
+    const outcome = await runAgentTaskToolLoop({
+        task: { id: 153 }, identity: { permissions: [{ name: 'bets.manage' }] }, prompt: 'Contexto', currentDirectory: '/company',
+        agentClient: { async createBet(parameters) { createCount++; return { bet: { id: createCount, title: parameters.title, status: 'proposed' }, replayed: false }; } },
+        runProvider: async () => ({ response: request }),
+        verifyTaskCurrent: async () => {}, renewLease: async () => {}, isAborted: () => false,
+    });
+    assert.equal(outcome.status, 'blocked');
+    assert.equal(createCount, 3);
 });
 
 test('worker skips tasks assigned elsewhere and active leases, then finishes only the claimed task', async () => {

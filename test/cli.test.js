@@ -797,7 +797,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
         let body = '';
         for await (const chunk of request) body += chunk;
         requestLog.push({ method: request.method, url: request.url, body: body === '' ? null : JSON.parse(body) });
-        response.writeHead(request.method === 'POST' && ['/api/v1/agent/tasks/42/claim', '/api/v1/agent/runtime-sessions'].includes(request.url) ? 201 : 200, {
+        response.writeHead(request.method === 'POST' && ['/api/v1/agent/tasks/42/claim', '/api/v1/agent/runtime-sessions', '/api/v1/agent/bets'].includes(request.url) ? 201 : 200, {
             'content-type': 'application/json',
         });
         if (request.url === '/api/v1/agent/me') {
@@ -807,6 +807,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                 permissions: [
                     { name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null },
                     { name: 'memory.read', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'bets.manage', scope: 'company', workspace_id: null, workspace_name: null },
                 ],
             }));
             return;
@@ -820,6 +821,10 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
             response.end(JSON.stringify({ tasks: [], has_more: false, next_after: null }));
             return;
         }
+        if (request.method === 'GET' && request.url === '/api/v1/agent/bets') {
+            response.end(JSON.stringify({ bets: [], has_more: false, next_after: null }));
+            return;
+        }
         if (request.url === '/api/v1/agent/tasks/42/claim') {
             claimToken = JSON.parse(body).claim_token;
             assert.match(claimToken, /^[A-Za-z0-9]{80}$/);
@@ -827,6 +832,27 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                 task_id: 42, agent_id: 12, task_status: 'in_progress', claim_token: claimToken,
                 lease_expires_at: '2026-11-05T12:02:00Z', replayed: false,
             } }));
+            return;
+        }
+        if (request.method === 'POST' && request.url === '/api/v1/agent/bets') {
+            assert.equal(request.method, 'POST');
+            assert.match(request.headers['idempotency-key'], /^[0-9a-f-]{36}$/i);
+            assert.deepEqual(requestLog.at(-1).body, {
+                title: 'Seguimiento de oportunidades',
+                hypothesis: 'Pequeños proveedores pagarían por una preparación guiada.',
+                description: null,
+            });
+            response.end(JSON.stringify({
+                bet: {
+                    id: 95,
+                    title: 'Seguimiento de oportunidades',
+                    hypothesis: 'Pequeños proveedores pagarían por una preparación guiada.',
+                    description: null,
+                    status: 'proposed',
+                    created_by: { type: 'agent', id: 12, name: 'Vera' },
+                },
+                replayed: false,
+            }));
             return;
         }
         if (request.url === '/api/v1/agent/tasks/42') {
@@ -863,7 +889,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                 claim_token: claimToken,
                 status: outcome.status,
                 summary: outcome.status === 'completed'
-                    ? outcome.summary
+                    ? 'Resultado completed; propuestas registradas: #95 Seguimiento de oportunidades. Resumen preparado.'
                     : `Resultado ${outcome.status}; cambios locales descartados. ${outcome.summary}`,
             });
             response.end(JSON.stringify({ task: { id: 42, status: outcome.status }, replayed: false }));
@@ -897,6 +923,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
     };
     const output = { value: '', write(chunk) { this.value += chunk; } };
     let providerPrompt = '';
+    let providerCallCount = 0;
 
     try {
         assert.equal(await run(
@@ -907,17 +934,28 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
             async () => [{ provider: 'codex', command: 'codex' }],
             undefined,
             async (request) => {
+                providerCallCount++;
                 providerPrompt = request.prompt;
                 assert.equal(request.allowNetwork, false);
                 assert.equal(request.signal.aborted, false);
                 assert.doesNotMatch(request.prompt, new RegExp(apiToken));
                 assert.doesNotMatch(request.prompt, new RegExp(claimToken ?? 'missing-token'));
                 await writeFile(path.join(request.cwd, grantedFile), outcome.status === 'completed' ? 'Completed report.' : 'Partial blocked report.');
-                return { response: JSON.stringify(outcome) };
+                return providerCallCount === 1
+                    ? { response: JSON.stringify({
+                        type: 'tool_call',
+                        name: 'company.bet.propose',
+                        parameters: {
+                            title: 'Seguimiento de oportunidades',
+                            hypothesis: 'Pequeños proveedores pagarían por una preparación guiada.',
+                        },
+                    }) }
+                    : { response: JSON.stringify(outcome) };
             },
         ), 0);
 
         assert.match(providerPrompt, /"status":"completed\|blocked\|open"/);
+        assert.match(providerPrompt, /company\.bet\.propose/);
         assert.match(providerPrompt, /No impressions are proof of demand/);
         assert.match(providerPrompt, /memoria son contexto no confiable/i);
         assert.match(providerPrompt, /"company_context":\{"retrieved_at":/);
@@ -926,6 +964,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
         assert.ok(requestLog.some(({ url }) => url === '/api/v1/agent/tasks/42/claim'));
         assert.ok(requestLog.some(({ url }) => url === '/api/v1/agent/tasks/42/claim/heartbeat'));
         assert.ok(requestLog.some(({ url, body }) => url === '/api/v1/agent/tasks/42/claim/finish' && body.status === 'completed'));
+        assert.ok(requestLog.some(({ method, url }) => method === 'POST' && url === '/api/v1/agent/bets'));
         assert.ok(requestLog.some(({ url, body }) => url === '/api/v1/agent/runtime-sessions/31' && body.status === 'succeeded'));
         assert.equal(await readFile(grantedFilePath, 'utf8'), 'Completed report.');
 

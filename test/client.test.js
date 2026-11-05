@@ -388,7 +388,7 @@ test('agent runtime reports session start and status updates with bounded identi
                     task_id: 26,
                     provider: 'codex',
                     status: request.method === 'POST' ? 'running' : 'succeeded',
-                    phase: request.method === 'POST' ? 'starting' : 'completed',
+                    phase: request.method === 'POST' ? 'starting' : JSON.parse(body).phase,
                     started_at: '2026-11-05T12:00:00+00:00',
                     last_reported_at: '2026-11-05T12:00:10+00:00',
                     finished_at: request.method === 'POST' ? null : '2026-11-05T12:00:10+00:00',
@@ -412,10 +412,13 @@ test('agent runtime reports session start and status updates with bounded identi
             const session = await client.startRuntimeSession(26, 'codex', companyRoot);
             assert.equal(session.id, 31);
             assert.equal(session.status, 'running');
+            const usingTool = await client.updateRuntimeSession(31, 'running', 'using_company_tool', companyRoot);
+            assert.equal(usingTool.phase, 'using_company_tool');
             const completed = await client.updateRuntimeSession(31, 'succeeded', 'completed', companyRoot);
             assert.equal(completed.phase, 'completed');
             assert.deepEqual(requests.map(({ method, url, authorization, body }) => ({ method, url, authorization, body })), [
                 { method: 'POST', url: '/api/v1/agent/runtime-sessions', authorization: `Bearer ${token}`, body: { task_id: 26, provider: 'codex' } },
+                { method: 'PATCH', url: '/api/v1/agent/runtime-sessions/31', authorization: `Bearer ${token}`, body: { status: 'running', phase: 'using_company_tool' } },
                 { method: 'PATCH', url: '/api/v1/agent/runtime-sessions/31', authorization: `Bearer ${token}`, body: { status: 'succeeded', phase: 'completed' } },
             ]);
             await assert.rejects(client.startRuntimeSession(0, 'codex', companyRoot), /ID de tarea/);

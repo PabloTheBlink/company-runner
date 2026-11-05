@@ -1176,7 +1176,7 @@ export class AgentClient {
             throw new Error('El ID de sesión debe ser un entero positivo.');
         }
         if (!['running', 'succeeded', 'failed', 'interrupted'].includes(status)
-            || !['working', 'applying_files', 'publishing', 'completed', 'failed', 'interrupted'].includes(phase)) {
+            || !['working', 'applying_files', 'using_company_tool', 'publishing', 'completed', 'failed', 'interrupted'].includes(phase)) {
             throw new Error('El estado de sesión Agent no es válido.');
         }
         const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
@@ -2409,7 +2409,7 @@ function isAgentRuntimeSession(session, expectedAgentId, expectedTaskId = null, 
         && ['codex', 'claude', 'agy'].includes(session.provider)
         && (expectedProvider === null || session.provider === expectedProvider)
         && ['running', 'succeeded', 'failed', 'interrupted'].includes(session.status)
-        && ['starting', 'working', 'applying_files', 'publishing', 'completed', 'failed', 'interrupted'].includes(session.phase)
+        && ['starting', 'working', 'applying_files', 'using_company_tool', 'publishing', 'completed', 'failed', 'interrupted'].includes(session.phase)
         && typeof session.started_at === 'string'
         && typeof session.last_reported_at === 'string'
         && (session.finished_at === null || typeof session.finished_at === 'string');
