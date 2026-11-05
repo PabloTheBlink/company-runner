@@ -170,9 +170,6 @@ export async function run(
             }
             if (agentArguments[0] === 'run') {
                 const options = parseAgentRuntimeRunOptions(agentArguments.slice(1));
-                if (options.provider === 'claude') {
-                    throw new Error('Claude Code se mantiene en preflight hasta integrar y verificar su sandbox local.');
-                }
                 const installedRuntimes = await runtimeDetector();
                 if (!installedRuntimes.some(({ provider }) => provider === options.provider)) {
                     throw new Error(`El proveedor ${options.provider} no está instalado localmente.`);
@@ -318,7 +315,7 @@ export async function run(
                 streams.stdout.write('No se ha iniciado un modelo ni se han comprobado permisos locales de archivos, terminal o red.\n');
                 return 0;
             }
-            if (agentArguments.length !== 0) throw new Error('Uso: mycompany agent runtime | plan TASK_ID --provider=codex|claude|agy | run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] | files list|grant|revoke.');
+            if (agentArguments.length !== 0) throw new Error('Uso: mycompany agent runtime | plan TASK_ID --provider=codex|claude|agy | run TASK_ID --provider=codex|claude|agy [--timeout=SEGUNDOS] | files list|grant|revoke.');
             const runtimes = await runtimeDetector();
             if (runtimes.length === 0) {
                 streams.stdout.write('No se encontró Codex, Claude Code ni Antigravity CLI (agy) en PATH.\n');
@@ -326,7 +323,7 @@ export async function run(
                 streams.stdout.write(`Proveedores locales detectados: ${runtimes.map(({ provider, command }) => `${provider} (${command})`).join(', ')}.\n`);
             }
             streams.stdout.write('Diagnóstico local: no conecta con MyCompanies, no lee tareas ni credenciales y no inicia ninguna sesión.\n');
-            streams.stdout.write('Para una tarea asignada, usa agent runtime run ID --provider=codex|agy; requiere confirmación y sandbox Linux.\n');
+            streams.stdout.write('Para una tarea asignada, usa agent runtime run ID --provider=codex|claude|agy; requiere confirmación y sandbox Linux.\n');
             return 0;
         }
         if (agentCommand === 'login') {
@@ -912,7 +909,7 @@ export function parseAgentRuntimePlanOptions(argumentsList) {
 }
 
 export function parseAgentRuntimeRunOptions(argumentsList) {
-    const usage = 'Uso: mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-company-context] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]].';
+    const usage = 'Uso: mycompany agent runtime run TASK_ID --provider=codex|claude|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-company-context] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]].';
     if (argumentsList.length < 2 || argumentsList.length > 10) {
         throw new Error(usage);
     }
@@ -988,7 +985,7 @@ export function parseAgentRuntimeRunOptions(argumentsList) {
         if (argument === '--publish=') throw new Error('Indica una ruta de publicación.');
         throw new Error('Opción desconocida o repetida para agent runtime run.');
     }
-    if (provider === null) throw new Error('Indica --provider=codex|agy para ejecutar la tarea.');
+    if (provider === null) throw new Error('Indica --provider=codex|claude|agy para ejecutar la tarea.');
     if (allowNetwork && provider !== 'codex') throw new Error('--allow-network solo está disponible para Codex.');
     if (!includeMemory && (memoryQuery !== null || memoryTopicId !== null || memoryWorkspaceId !== null)) {
         throw new Error('Las opciones --memory-query, --memory-topic y --memory-workspace requieren --include-memory.');
@@ -1753,10 +1750,11 @@ function printHelp(stdout) {
     stdout.write('    Detecta Codex, Claude Code y Antigravity CLI (agy) en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
     stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude|agy\n');
     stdout.write('    Comprueba identidad, acceso a tarea y asignación del Agent. Solo muestra un plan; no inicia un modelo.\n');
-    stdout.write('  mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-company-context] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]]\n');
-    stdout.write('    Ejecuta una tarea asignada con Codex o AgY en Linux, tras confirmación escrita; envía la descripción y archivos read al proveedor.\n');
+    stdout.write('  mycompany agent runtime run TASK_ID --provider=codex|claude|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-company-context] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]]\n');
+    stdout.write('    Ejecuta una tarea asignada con Codex, Claude Code o AgY en Linux, tras confirmación escrita; envía la descripción y archivos read al proveedor.\n');
     stdout.write('    Usa el sandbox del proveedor, aplica solo rutas con permiso write y elimina el staging al terminar. La red está deshabilitada por defecto.\n');
-    stdout.write('    --allow-network habilita red abierta solo para Codex y exige confirmación explícita; no restringe dominios. Claude sigue en preflight.\n');
+    stdout.write('    Claude Code usa --restricted con Read, Write y Edit limitados al staging; no dispone de terminal, web ni MCP. La prueba real con el proveedor está pendiente.\n');
+    stdout.write('    --allow-network habilita red abierta solo para Codex y exige confirmación explícita; no restringe dominios. Claude y AgY mantienen la red deshabilitada.\n');
     stdout.write('    --include-memory añade hasta cinco recuerdos autorizados; query sustituye el texto derivado de la tarea y topic/workspace estrechan el ámbito.\n');
     stdout.write('    --include-company-context consulta secciones de lectura permitidas y envía resúmenes limitados; no comparte credenciales ni permite consultas desde el modelo.\n');
     stdout.write('    --publish publica un único archivo .md, .txt o .pdf autorizado localmente y con artifacts.publish; la confirmación indica qué archivo se envía.\n');

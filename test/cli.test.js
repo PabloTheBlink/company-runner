@@ -52,11 +52,28 @@ test('agent runtime reports installed providers without loading credentials or s
 
     assert.equal(await run(['agent', 'runtime'], { stdout: output }, process.cwd(), {}), 0);
     assert.match(output.value, /Diagnóstico local: no conecta con MyCompanies, no lee tareas ni credenciales y no inicia ninguna sesión/);
-    assert.match(output.value, /agent runtime run ID --provider=codex\|agy/);
+    assert.match(output.value, /agent runtime run ID --provider=codex\|claude\|agy/);
     for (const runtime of runtimes) {
         assert.match(output.value, new RegExp(`${runtime.provider} \\(${runtime.command}\\)`));
     }
     await assert.rejects(run(['agent', 'runtime', '--provider=codex'], { stdout: output }, process.cwd(), {}), /Uso:/);
+});
+
+test('agent runtime allows Claude through local provider detection without starting a provider', async () => {
+    let detectionCount = 0;
+
+    await assert.rejects(run(
+        ['agent', 'runtime', 'run', '42', '--provider=claude'],
+        { stdout: { write() {} } },
+        '/company',
+        {},
+        async () => {
+            detectionCount++;
+            return [];
+        },
+    ), /El proveedor claude no está instalado localmente/);
+
+    assert.equal(detectionCount, 1);
 });
 
 test('agent runtime plan requires a positive task ID and explicit supported provider', () => {
@@ -1047,7 +1064,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent identities/);
     assert.match(output.value, /mycompany agent credential list AGENT_ID/);
     assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
-    assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=codex\|agy/);
+    assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=codex\|claude\|agy/);
     assert.match(output.value, /--include-company-context/);
     assert.match(output.value, /red está deshabilitada por defecto/);
     assert.match(output.value, /red abierta solo para Codex/);

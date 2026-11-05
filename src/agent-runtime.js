@@ -6,6 +6,7 @@ const MAX_PROVIDER_DIAGNOSTIC_BYTES = 128 * 1024;
 const MAX_RUNTIME_MS = 15 * 60 * 1000;
 const PROVIDER_PROMPT = 'Lee el contexto estructurado enviado por MyCompanies en stdin y trabaja en la tarea indicada. Devuelve un resumen final.';
 const CODEX_PROMPT = 'Lee el contexto estructurado enviado por MyCompanies en stdin y trabaja únicamente con los archivos del workspace aislado. Devuelve un resumen final.';
+const CLAUDE_PROMPT = 'Lee el contexto estructurado enviado por MyCompanies en stdin. Trabaja solo con los archivos disponibles en el directorio temporal aislado y devuelve un resumen final.';
 const RUNTIME_SETTINGS = Object.freeze({
     agentMode: 'accept-edits',
     allowNonWorkspaceAccess: false,
@@ -184,6 +185,152 @@ export async function runCodexAgent({
     });
 }
 
+export function buildClaudeInvocation({ prompt, cwd, timeoutMs }) {
+    if (typeof prompt !== 'string' || prompt.length === 0) {
+        throw new Error('Falta el contexto de la tarea para iniciar el proveedor.');
+    }
+    if (typeof cwd !== 'string' || cwd.length === 0) {
+        throw new Error('Falta la carpeta temporal aislada para el proveedor.');
+    }
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > MAX_RUNTIME_MS) {
+        throw new Error('El límite del runtime debe estar entre 1 segundo y 15 minutos.');
+    }
+
+    return {
+        command: 'claude',
+        args: [
+            '--restricted',
+            '--tools', 'Read,Write,Edit',
+            '--strict-mcp-config',
+            '--disallowedTools', 'mcp__*',
+            '--disable-slash-commands',
+            '--no-session-persistence',
+            '--permission-mode', 'acceptEdits',
+            '--permission-prompts', 'none',
+            '--output-format', 'json',
+            '--max-turns', '20',
+            '--print',
+            CLAUDE_PROMPT,
+        ],
+        cwd,
+        input: prompt,
+    };
+}
+
+export async function runClaudeAgent({
+    prompt,
+    cwd,
+    timeoutMs,
+    signal,
+    spawnImplementation = spawn,
+    environment = process.env,
+}) {
+    if (signal?.aborted) throw new Error('La ejecución del agente fue interrumpida.');
+
+    const invocation = buildClaudeInvocation({ prompt, cwd, timeoutMs });
+
+    return new Promise((resolve, reject) => {
+        let child;
+        let outputBytes = 0;
+        let diagnosticBytes = 0;
+        const outputChunks = [];
+        let failure = null;
+        let escalationTimer;
+        const timeoutTimer = setTimeout(() => {
+            failure = new Error('El proveedor superó el límite de tiempo; no se aplicaron cambios locales.');
+            terminateChild(child, 'SIGTERM');
+            escalationTimer = setTimeout(() => terminateChild(child, 'SIGKILL'), 1_000);
+            escalationTimer.unref?.();
+        }, timeoutMs + 5_000);
+        timeoutTimer.unref?.();
+
+        const cleanup = () => {
+            clearTimeout(timeoutTimer);
+            clearTimeout(escalationTimer);
+            signal?.removeEventListener('abort', abortHandler);
+        };
+        const abortHandler = () => {
+            failure = new Error('La ejecución del agente fue interrumpida; no se aplicaron cambios locales.');
+            terminateChild(child, 'SIGTERM');
+            escalationTimer = setTimeout(() => terminateChild(child, 'SIGKILL'), 1_000);
+            escalationTimer.unref?.();
+        };
+
+        try {
+            child = spawnImplementation(invocation.command, invocation.args, {
+                cwd: invocation.cwd,
+                env: selectClaudeEnvironment(environment),
+                shell: false,
+                windowsHide: true,
+                detached: process.platform !== 'win32',
+                stdio: ['pipe', 'pipe', 'pipe'],
+            });
+        } catch {
+            cleanup();
+            reject(new Error('No se pudo iniciar Claude Code CLI.'));
+            return;
+        }
+
+        signal?.addEventListener('abort', abortHandler, { once: true });
+        child.stdout.on('data', (chunk) => {
+            outputBytes += chunk.length;
+            if (outputBytes > MAX_PROVIDER_OUTPUT_BYTES) {
+                failure = new Error('La respuesta del proveedor superó el límite; no se aplicaron cambios locales.');
+                terminateChild(child, 'SIGTERM');
+                escalationTimer = setTimeout(() => terminateChild(child, 'SIGKILL'), 1_000);
+                escalationTimer.unref?.();
+                return;
+            }
+            outputChunks.push(chunk);
+        });
+        child.stderr.on('data', (chunk) => {
+            diagnosticBytes += chunk.length;
+            if (diagnosticBytes > MAX_PROVIDER_DIAGNOSTIC_BYTES && failure === null) {
+                failure = new Error('El proveedor generó demasiados mensajes de diagnóstico.');
+                terminateChild(child, 'SIGTERM');
+                escalationTimer = setTimeout(() => terminateChild(child, 'SIGKILL'), 1_000);
+                escalationTimer.unref?.();
+            }
+        });
+        child.once('error', () => {
+            cleanup();
+            reject(new Error('No se pudo iniciar Claude Code CLI.'));
+        });
+        child.once('close', (exitCode) => {
+            cleanup();
+            if (failure !== null) {
+                reject(failure);
+                return;
+            }
+            if (exitCode !== 0) {
+                reject(new Error('Claude Code CLI no completó la tarea correctamente.'));
+                return;
+            }
+
+            let result;
+            try {
+                result = JSON.parse(Buffer.concat(outputChunks).toString('utf8'));
+            } catch {
+                reject(new Error('Claude Code CLI devolvió una respuesta no válida.'));
+                return;
+            }
+            if (result?.type !== 'result'
+                || result.subtype !== 'success'
+                || result.is_error !== false
+                || typeof result.result !== 'string'
+                || result.result.length === 0
+                || Buffer.byteLength(result.result, 'utf8') > MAX_PROVIDER_OUTPUT_BYTES) {
+                reject(new Error('Claude Code CLI no devolvió una respuesta satisfactoria.'));
+                return;
+            }
+
+            resolve({ response: result.result });
+        });
+        child.stdin.on('error', () => {});
+        child.stdin.end(invocation.input, 'utf8');
+    });
+}
+
 export async function runAntigravityAgent({
     prompt,
     cwd,
@@ -303,8 +450,9 @@ export async function runAntigravityAgent({
 
 export async function runAgentRuntime(request) {
     if (request?.provider === 'codex') return runCodexAgent(request);
+    if (request?.provider === 'claude') return runClaudeAgent(request);
     if (request?.provider === 'agy') return runAntigravityAgent(request);
-    throw new Error('El runtime integrado de Claude Code aún no está disponible.');
+    throw new Error('El proveedor solicitado no está disponible en el runtime local.');
 }
 
 async function verifyLinuxSandbox() {
@@ -324,6 +472,16 @@ async function verifyLinuxSandbox() {
 
 function selectProviderEnvironment(environment) {
     return Object.fromEntries(RUNTIME_ENVIRONMENT_KEYS
+        .filter((key) => typeof environment[key] === 'string')
+        .map((key) => [key, environment[key]]));
+}
+
+function selectClaudeEnvironment(environment) {
+    const keys = new Set([
+        ...RUNTIME_ENVIRONMENT_KEYS.filter((key) => !['GEMINI_API_KEY', 'CODEX_HOME'].includes(key)),
+        'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CONFIG_DIR',
+    ]);
+    return Object.fromEntries([...keys]
         .filter((key) => typeof environment[key] === 'string')
         .map((key) => [key, environment[key]]));
 }
