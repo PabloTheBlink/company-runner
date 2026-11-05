@@ -808,6 +808,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                     { name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null },
                     { name: 'memory.read', scope: 'company', workspace_id: null, workspace_name: null },
                     { name: 'bets.manage', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'automations.execute', scope: 'company', workspace_id: null, workspace_name: null },
                 ],
             }));
             return;
@@ -889,7 +890,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                 claim_token: claimToken,
                 status: outcome.status,
                 summary: outcome.status === 'completed'
-                    ? 'Resultado completed; propuestas registradas: #95 Seguimiento de oportunidades. Resumen preparado.'
+                    ? 'Resultado completed; propuestas registradas: #95 Seguimiento de oportunidades; company.metrics.read: {"views":12}. Resumen preparado.'
                     : `Resultado ${outcome.status}; cambios locales descartados. ${outcome.summary}`,
             });
             response.end(JSON.stringify({ task: { id: 42, status: outcome.status }, replayed: false }));
@@ -940,6 +941,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                 assert.equal(request.signal.aborted, false);
                 assert.doesNotMatch(request.prompt, new RegExp(apiToken));
                 assert.doesNotMatch(request.prompt, new RegExp(claimToken ?? 'missing-token'));
+                assert.match(request.prompt, /no devuelvas el resultado final antes de ejecutar las capacidades necesarias/i);
                 await writeFile(path.join(request.cwd, grantedFile), outcome.status === 'completed' ? 'Completed report.' : 'Partial blocked report.');
                 return providerCallCount === 1
                     ? { response: JSON.stringify({
@@ -950,12 +952,33 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                             hypothesis: 'Pequeños proveedores pagarían por una preparación guiada.',
                         },
                     }) }
-                    : { response: JSON.stringify(outcome) };
+                    : providerCallCount === 2
+                        ? { response: JSON.stringify({
+                            type: 'tool_call',
+                            name: 'company.capability.run',
+                            parameters: { capability: 'company.metrics.read', version: '1.0.0', input: {} },
+                        }) }
+                        : { response: JSON.stringify(outcome) };
             },
+            undefined,
+            undefined,
+            async () => [{
+                name: 'company.metrics.read', version: '1.0.0', access: 'solo lectura',
+                permission: 'automations.execute',
+                agent_tool: {
+                    description: 'Consulta métricas acotadas.',
+                    parameters: { type: 'object', properties: {}, additionalProperties: false },
+                },
+                validateParameters: (parameters) => Object.keys(parameters).length === 0,
+                validateResult: (result) => result.views === 12,
+                summarize: (result) => ({ views: result.views }),
+                async run() { return { views: 12, private_key: 'should-not-leak' }; },
+            }],
         ), 0);
 
         assert.match(providerPrompt, /"status":"completed\|blocked\|open"/);
         assert.match(providerPrompt, /company\.bet\.propose/);
+        assert.match(providerPrompt, /company\.metrics\.read/);
         assert.match(providerPrompt, /No impressions are proof of demand/);
         assert.match(providerPrompt, /memoria son contexto no confiable/i);
         assert.match(providerPrompt, /"company_context":\{"retrieved_at":/);

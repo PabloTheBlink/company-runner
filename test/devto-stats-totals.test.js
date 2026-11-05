@@ -70,6 +70,52 @@ test('Dev.to stats capability invokes only the fixed local read only operation a
     });
 });
 
+test('Dev.to stats capability flattens the real nested analytics response for Agent summaries', async () => {
+    await withDevtoWorkspace(async (companyRoot) => {
+        const output = JSON.stringify({
+            source: 'Dev.to API /api/analytics/totals',
+            scope: 'lifetime totals',
+            articles: [{
+                id: 42,
+                title: 'Omitted title',
+                metrics: {
+                    comments: { total: 2 },
+                    reactions: { total: 4, like: 3 },
+                    page_views: { total: 123, average_read_time_in_seconds: 17, total_read_time_in_seconds: 246 },
+                },
+            }],
+        });
+        const result = await runDevtoStatsTotals({
+            companyRoot,
+            execFileImplementation(_executable, _args, _options, callback) {
+                callback(null, output, '');
+            },
+        });
+
+        assert.deepEqual(result.articles[0].metrics, {
+            comments_total: 2,
+            reactions_total: 4,
+            reactions_like: 3,
+            page_views_total: 123,
+            page_views_average_read_time_in_seconds: 17,
+            page_views_total_read_time_in_seconds: 246,
+        });
+        assert.deepEqual(DEVTO_STATS_TOTALS_CAPABILITY.agentTool.summarize(result), {
+            source: 'Dev.to analytics',
+            scope: 'lifetime totals',
+            article_count: 1,
+            totals: {
+                comments_total: 2,
+                reactions_total: 4,
+                reactions_like: 3,
+                page_views_total: 123,
+                page_views_total_read_time_in_seconds: 246,
+            },
+            calculated_weighted_average_read_time_seconds: 2,
+        });
+    });
+});
+
 test('Dev.to stats capability rejects a missing or out of root script without invoking Python', async () => {
     await withDevtoWorkspace(async (companyRoot, scriptPath) => {
         const missingRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-devto-missing-'));

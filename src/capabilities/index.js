@@ -35,6 +35,30 @@ export function listLocalCapabilities(companyRoot) {
     return localCapabilityRegistry.listInstalled(companyRoot);
 }
 
+export async function listAgentCapabilities(companyRoot, identity, task) {
+    const installed = await localCapabilityRegistry.listInstalled(companyRoot);
+
+    return installed
+        .filter((capability) => capability.agent_tool !== undefined
+            && capability.access === 'solo lectura'
+            && identity.permissions.some((permission) => permission?.name === capability.agent_tool.permission
+                && (permission.scope === 'company'
+                    || (task.workspace_id !== null && task.workspace_id !== undefined
+                        && permission.workspace_id === task.workspace_id))))
+        .map((capability) => {
+            const adapter = localCapabilityRegistry.get(capability.name, capability.version);
+
+            return {
+                ...capability,
+                permission: capability.agent_tool.permission,
+                validateParameters: adapter.agentTool.validateParameters,
+                validateResult: adapter.validateResult,
+                summarize: adapter.agentTool.summarize ?? adapter.summarize,
+                run: ({ companyRoot: selectedCompanyRoot, parameters }) => adapter.run({ companyRoot: selectedCompanyRoot, parameters }),
+            };
+        });
+}
+
 function isValidDevtoResult(result) {
     return result !== null
         && typeof result === 'object'

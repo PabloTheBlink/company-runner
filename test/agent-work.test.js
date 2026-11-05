@@ -188,6 +188,88 @@ test('Agent task tool loop refuses a proposal without bets.manage and caps repea
     assert.equal(createCount, 3);
 });
 
+test('Agent task tool loop invokes an installed read capability only within its permission scope', async () => {
+    const events = [];
+    const capability = {
+        name: 'company.metrics.read',
+        version: '1.0.0',
+        access: 'solo lectura',
+        permission: 'automations.execute',
+        validateParameters: (parameters) => Object.keys(parameters).length === 0,
+        validateResult: (result) => result !== null && result.views === 12,
+        run: async () => { events.push('run'); return { views: 12, secret: 'never-forward-this' }; },
+        summarize: (result) => ({ views: result.views }),
+    };
+    const response = JSON.stringify({
+        type: 'tool_call',
+        name: 'company.capability.run',
+        parameters: { capability: capability.name, version: capability.version, input: {} },
+    });
+    const outcome = await runAgentTaskToolLoop({
+        task: { id: 153, workspace_id: 8 },
+        identity: { permissions: [{ name: 'automations.execute', scope: 'workspace', workspace_id: 8 }] },
+        prompt: 'Contexto', currentDirectory: '/company', agentClient: { async createBet() { assert.fail('No bet expected'); } },
+        companyCapabilities: [capability],
+        runProvider: async ({ prompt }) => {
+            events.push(prompt.includes('never-forward-this') ? 'secret-leaked' : 'provider');
+            if (events.filter((event) => event === 'provider').length === 1) return { response };
+            return { response: JSON.stringify({ status: 'completed', summary: 'Métricas verificadas.' }) };
+        },
+        verifyTaskCurrent: async () => { events.push('verify'); },
+        renewLease: async () => { events.push('renew'); },
+        isAborted: () => false,
+    });
+
+    assert.equal(outcome.status, 'completed');
+    assert.deepEqual(outcome.companyActions, [{ capability: capability.name, result: { views: 12 } }]);
+    assert.deepEqual(events, ['provider', 'verify', 'renew', 'run', 'provider']);
+});
+
+test('Agent task tool loop rejects uninstalled, non-read, ungranted, and out-of-scope capabilities', async () => {
+    const toolResponse = JSON.stringify({
+        type: 'tool_call',
+        name: 'company.capability.run',
+        parameters: { capability: 'company.metrics.read', version: '1.0.0', input: {} },
+    });
+    let runCount = 0;
+    const capability = {
+        name: 'company.metrics.read', version: '1.0.0', access: 'solo lectura', permission: 'automations.execute',
+        validateParameters: () => true, validateResult: () => true,
+        run: async () => { runCount++; return {}; }, summarize: () => ({}),
+    };
+    const execute = (identity, capabilities = [capability]) => runAgentTaskToolLoop({
+        task: { id: 153, workspace_id: 8 }, identity, prompt: 'Contexto', currentDirectory: '/company',
+        agentClient: { async createBet() { assert.fail('No bet expected'); } }, companyCapabilities: capabilities,
+        runProvider: async () => ({ response: toolResponse }),
+        verifyTaskCurrent: async () => {}, renewLease: async () => {}, isAborted: () => false,
+    });
+    const scopedGrant = (workspaceId) => ({ permissions: [{ name: 'automations.execute', scope: 'workspace', workspace_id: workspaceId }] });
+
+    await assert.rejects(execute(scopedGrant(7)), /automations\.execute/);
+    await assert.rejects(execute(scopedGrant(8), []), /no está instalada/);
+    await assert.rejects(execute({ permissions: [{ name: 'automations.execute', scope: 'company' }] }, [{ ...capability, access: 'escritura' }]), /solo lectura/);
+    assert.equal(runCount, 0);
+});
+
+test('Agent task tool loop filters nested sensitive fields from capability results', async () => {
+    const capability = {
+        name: 'company.metrics.read', version: '1.0.0', access: 'solo lectura', permission: 'automations.execute',
+        validateParameters: () => true, validateResult: () => true,
+        run: async () => ({ safe: true }),
+        summarize: () => ({ metrics: { api_token: 'private' } }),
+    };
+    await assert.rejects(runAgentTaskToolLoop({
+        task: { id: 153 }, identity: { permissions: [{ name: 'automations.execute', scope: 'company' }] },
+        prompt: 'Contexto', currentDirectory: '/company', agentClient: { async createBet() { assert.fail('No bet expected'); } },
+        companyCapabilities: [capability],
+        runProvider: async () => ({ response: JSON.stringify({
+            type: 'tool_call', name: 'company.capability.run',
+            parameters: { capability: capability.name, version: capability.version, input: {} },
+        }) }),
+        verifyTaskCurrent: async () => {}, renewLease: async () => {}, isAborted: () => false,
+    }), /no es seguro/);
+});
+
 test('worker skips tasks assigned elsewhere and active leases, then finishes only the claimed task', async () => {
     const claims = [];
     const finished = [];

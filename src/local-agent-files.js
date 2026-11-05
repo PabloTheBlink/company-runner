@@ -67,6 +67,7 @@ export async function applyLocalAgentFileWrites({ agentId, grants, companyRoot, 
         const stagedPath = path.join(roots.stagingRoot, ...relativePath.split('/'));
         const stagedFile = await inspectRegularFile(stagedPath);
         if (!stagedFile.exists) {
+            if (!entry.existed) continue;
             throw new Error(`Falta el archivo temporal autorizado para escritura: ${relativePath}.`);
         }
         const outputContent = await readFile(stagedPath);

@@ -11,6 +11,39 @@ export const DEVTO_STATS_TOTALS_CAPABILITY = Object.freeze({
     version: '1.0.0',
     maxRuntimeMs: 120_000,
     maxOutputBytes: 1_048_576,
+    agentTool: Object.freeze({
+        permission: 'automations.execute',
+        description: 'Consulta las métricas acumuladas de los artículos Dev.to configurados en esta empresa.',
+        parameters: Object.freeze({ type: 'object', properties: {}, additionalProperties: false }),
+        validateParameters: (parameters) => parameters !== null
+            && typeof parameters === 'object'
+            && !Array.isArray(parameters)
+            && Object.keys(parameters).length === 0,
+        summarize: (result) => {
+            const totals = {};
+            for (const article of result.articles) {
+                for (const [name, value] of Object.entries(article.metrics)) {
+                    if (name.endsWith('_average_read_time_in_seconds')) continue;
+                    const total = (totals[name] ?? 0) + value;
+                    if (Number.isFinite(total)) totals[name] = total;
+                }
+            }
+
+            const views = totals.page_views_total;
+            const readTime = totals.page_views_total_read_time_in_seconds;
+            const weightedAverage = Number.isFinite(views) && views > 0 && Number.isFinite(readTime)
+                ? Math.round((readTime / views) * 100) / 100
+                : null;
+
+            return {
+                source: result.source,
+                scope: result.scope,
+                article_count: result.articles.length,
+                totals,
+                ...(weightedAverage === null ? {} : { calculated_weighted_average_read_time_seconds: weightedAverage }),
+            };
+        },
+    }),
 });
 
 export async function isDevtoStatsInstalled(companyRoot) {
@@ -136,16 +169,7 @@ function validateAndFilterResponse(response) {
         }
 
         const metrics = {};
-        for (const [name, value] of Object.entries(article.metrics)) {
-            if (!/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(name)
-                || typeof value !== 'number'
-                || !Number.isFinite(value)
-                || value < 0) {
-                throw new Error('La respuesta de métricas Dev.to no es válida.');
-            }
-
-            metrics[name] = value;
-        }
+        flattenMetrics(article.metrics, '', metrics, 0);
 
         return { id: article.id, metrics };
     });
@@ -155,4 +179,30 @@ function validateAndFilterResponse(response) {
         scope: OUTPUT_SCOPE,
         articles,
     };
+}
+
+function flattenMetrics(value, prefix, metrics, depth) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        if (!/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(prefix) || Object.hasOwn(metrics, prefix)) {
+            throw new Error('La respuesta de métricas Dev.to no es válida.');
+        }
+        metrics[prefix] = value;
+        if (Object.keys(metrics).length > 100) {
+            throw new Error('La respuesta de métricas Dev.to no es válida.');
+        }
+
+        return;
+    }
+
+    if (value === null || typeof value !== 'object' || Array.isArray(value) || depth >= 3) {
+        throw new Error('La respuesta de métricas Dev.to no es válida.');
+    }
+
+    for (const [name, nestedValue] of Object.entries(value)) {
+        if (!/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(name)) {
+            throw new Error('La respuesta de métricas Dev.to no es válida.');
+        }
+        const key = prefix === '' ? name : `${prefix}_${name}`;
+        flattenMetrics(nestedValue, key, metrics, depth + 1);
+    }
 }

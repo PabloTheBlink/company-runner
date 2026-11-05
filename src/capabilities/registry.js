@@ -22,7 +22,16 @@ export function createCapabilityRegistry(adapters) {
             || adapter.maxRuntimeMs < 1
             || typeof adapter.validateParameters !== 'function'
             || typeof adapter.validateResult !== 'function'
-            || typeof adapter.summarize !== 'function') {
+            || typeof adapter.summarize !== 'function'
+            || (adapter.agentTool !== undefined && (adapter.agentTool === null
+                || typeof adapter.agentTool !== 'object'
+                || Array.isArray(adapter.agentTool)
+                || typeof adapter.agentTool.permission !== 'string'
+                || typeof adapter.agentTool.description !== 'string'
+                || adapter.agentTool.parameters === null
+                || typeof adapter.agentTool.parameters !== 'object'
+                || Array.isArray(adapter.agentTool.parameters)
+                || typeof adapter.agentTool.validateParameters !== 'function'))) {
             throw new Error('El adaptador de capacidad no es válido.');
         }
 
@@ -47,6 +56,11 @@ export function createCapabilityRegistry(adapters) {
                         version: adapter.version,
                         access: adapter.access,
                         requirement: adapter.requirement,
+                        ...(adapter.agentTool === undefined ? {} : { agent_tool: {
+                            permission: adapter.agentTool.permission,
+                            description: adapter.agentTool.description,
+                            parameters: adapter.agentTool.parameters,
+                        } }),
                     });
                 }
             }

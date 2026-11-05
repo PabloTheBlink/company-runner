@@ -91,6 +91,19 @@ test('write grants leave a new file absent in staging so the Agent can create it
     }
 });
 
+test('an authorized new write target may remain absent when the Agent does not edit it', async () => {
+    await withLocalFileWorkspace(async ({ companyRoot, stagingRoot }) => {
+        await mkdir(path.join(companyRoot, 'reports'));
+        const grants = [{ agentId: 12, path: 'reports/optional.md', operations: ['write'] }];
+        const workspace = await stageLocalAgentFiles({ agentId: 12, grants, companyRoot, stagingRoot });
+
+        const writtenPaths = await applyLocalAgentFileWrites({ agentId: 12, grants, companyRoot, stagingRoot, workspace });
+
+        assert.deepEqual(writtenPaths, []);
+        await assert.rejects(lstat(path.join(companyRoot, 'reports', 'optional.md')), { code: 'ENOENT' });
+    });
+});
+
 test('refuses to overwrite a company file changed after staging', async () => {
     await withLocalFileWorkspace(async ({ companyRoot, stagingRoot }) => {
         const targetPath = path.join(companyRoot, '.env');
