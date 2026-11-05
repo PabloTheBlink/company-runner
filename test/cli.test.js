@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentDelegationOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentDelegationOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, parseAgentWorkOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 import { listLocalAgentRuntimes } from '../src/runtime.js';
@@ -84,6 +84,27 @@ test('agent runtime plan requires a positive task ID and explicit supported prov
     assert.throws(() => parseAgentRuntimePlanOptions(['0', '--provider=codex']), /positivo/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=other']), /proveedor/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=codex', '--provider=claude']), /Uso:/);
+});
+
+test('agent work requires one-shot mode and a supported provider with bounded options', () => {
+    assert.deepEqual(parseAgentWorkOptions(['--once', '--provider=codex']), {
+        once: true,
+        provider: 'codex',
+        taskId: null,
+        timeoutSeconds: 300,
+    });
+    assert.deepEqual(parseAgentWorkOptions(['--once', '--provider=agy', '--task=42', '--timeout=90']), {
+        once: true,
+        provider: 'agy',
+        taskId: 42,
+        timeoutSeconds: 90,
+    });
+    assert.throws(() => parseAgentWorkOptions(['--provider=codex']), /--once/);
+    assert.throws(() => parseAgentWorkOptions(['--once']), /provider/);
+    assert.throws(() => parseAgentWorkOptions(['--once', '--provider=other']), /proveedor/);
+    assert.throws(() => parseAgentWorkOptions(['--once', '--provider=codex', '--task=0']), /positivo/);
+    assert.throws(() => parseAgentWorkOptions(['--once', '--provider=codex', '--timeout=901']), /entre 10 y 900/);
+    assert.throws(() => parseAgentWorkOptions(['--once', '--provider=codex', '--once']), /Uso:/);
 });
 
 test('agent delegation options require one provider and allow explicit apply only', () => {
@@ -685,6 +706,144 @@ test('agent runtime run stages only granted files, applies only authorized write
         assert.match(output.value, /Archivos actualizados: \.env, reports\/daily\.md/);
         assert.match(output.value, /Informe #77 publicado para Preparar informe \(daily\.md\)/);
         await assert.rejects(stat(taskRunnerCalls[0].cwd), { code: 'ENOENT' });
+    } finally {
+        server.close();
+        await once(server, 'close');
+        await rm(testRoot, { recursive: true, force: true });
+    }
+});
+
+test('agent work claims, runs without passing the lease token to Codex, and records task completion', async () => {
+    const testRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-work-test-'));
+    const companyRoot = path.join(testRoot, 'company');
+    const configRoot = path.join(testRoot, 'config');
+    await mkdir(companyRoot, { recursive: true });
+    await mkdir(configRoot, { mode: 0o700 });
+    const apiToken = 'A'.repeat(80);
+    let claimToken = null;
+    const requestLog = [];
+    const task = {
+        id: 42,
+        title: 'Prepare market summary',
+        description: 'Summarize the authorized source material.',
+        status: 'in_progress',
+        priority: 'normal',
+        due_date: null,
+        assignee: { type: 'agent', id: 12, name: 'Vera' },
+        workspace: { id: 4, name: 'Research' },
+    };
+    const session = {
+        id: 31,
+        agent_id: 12,
+        task_id: 42,
+        provider: 'codex',
+        status: 'running',
+        phase: 'starting',
+        started_at: '2026-11-05T12:00:00Z',
+        last_reported_at: '2026-11-05T12:00:00Z',
+        finished_at: null,
+    };
+    const server = createServer(async (request, response) => {
+        assert.equal(request.headers.authorization, `Bearer ${apiToken}`);
+        let body = '';
+        for await (const chunk of request) body += chunk;
+        requestLog.push({ method: request.method, url: request.url, body: body === '' ? null : JSON.parse(body) });
+        response.writeHead(request.method === 'POST' && ['/api/v1/agent/tasks/42/claim', '/api/v1/agent/runtime-sessions'].includes(request.url) ? 201 : 200, {
+            'content-type': 'application/json',
+        });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: 'CEO' },
+                company: { id: 4, name: 'Empresa' },
+                permissions: [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }],
+            }));
+            return;
+        }
+        if (request.url.startsWith('/api/v1/agent/tasks?')) {
+            const status = new URL(request.url, 'http://localhost').searchParams.get('status');
+            response.end(JSON.stringify({ tasks: status === 'open' ? [{ ...task, status: 'open', description: undefined }] : [], has_more: false, next_after: null }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/42/claim') {
+            claimToken = JSON.parse(body).claim_token;
+            assert.match(claimToken, /^[A-Za-z0-9]{80}$/);
+            response.end(JSON.stringify({ claim: {
+                task_id: 42, agent_id: 12, task_status: 'in_progress', claim_token: claimToken,
+                lease_expires_at: '2026-11-05T12:02:00Z', replayed: false,
+            } }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/42') {
+            response.end(JSON.stringify({ task }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/runtime-sessions') {
+            response.end(JSON.stringify({ session }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/42/claim/heartbeat') {
+            assert.equal(JSON.parse(body).claim_token, claimToken);
+            response.end(JSON.stringify({ claim: { task_id: 42, lease_expires_at: '2026-11-05T12:02:00Z', renewed: true } }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/42/claim/finish') {
+            assert.equal(JSON.parse(body).claim_token, claimToken);
+            response.end(JSON.stringify({ task: { id: 42, status: 'completed' }, replayed: false }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/runtime-sessions/31') {
+            const update = JSON.parse(body);
+            response.end(JSON.stringify({ session: {
+                ...session,
+                status: update.status,
+                phase: update.phase,
+                last_reported_at: '2026-11-05T12:00:10Z',
+                finished_at: update.status === 'succeeded' ? '2026-11-05T12:00:10Z' : null,
+            } }));
+            return;
+        }
+        response.writeHead(404);
+        response.end('{}');
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const configStore = {
+        localAgentFilePolicyPath: path.join(configRoot, 'agent-file-access.json'),
+        async loadAgentForDirectory() {
+            return {
+                server_url: `http://127.0.0.1:${server.address().port}`,
+                agent_id: 12, company_id: 4, allow_insecure_localhost: true, api_token: apiToken,
+            };
+        },
+        async listAgentFileAccessForDirectory() { return []; },
+    };
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+    let providerPrompt = '';
+
+    try {
+        assert.equal(await run(
+            ['agent', 'work', '--once', '--provider=codex', '--task=42'],
+            { stdout: output },
+            companyRoot,
+            configStore,
+            async () => [{ provider: 'codex', command: 'codex' }],
+            undefined,
+            async (request) => {
+                providerPrompt = request.prompt;
+                assert.equal(request.allowNetwork, false);
+                assert.equal(request.signal.aborted, false);
+                assert.doesNotMatch(request.prompt, new RegExp(apiToken));
+                assert.doesNotMatch(request.prompt, new RegExp(claimToken ?? 'missing-token'));
+                return { response: JSON.stringify({ status: 'completed', summary: 'Resumen preparado.' }) };
+            },
+        ), 0);
+
+        assert.match(providerPrompt, /"status":"completed\|blocked\|open"/);
+        assert.match(output.value, /Tarea #42 finalizada como completed/);
+        assert.ok(requestLog.some(({ url }) => url === '/api/v1/agent/tasks/42/claim'));
+        assert.ok(requestLog.some(({ url }) => url === '/api/v1/agent/tasks/42/claim/heartbeat'));
+        assert.ok(requestLog.some(({ url, body }) => url === '/api/v1/agent/tasks/42/claim/finish' && body.status === 'completed'));
+        assert.ok(requestLog.some(({ url, body }) => url === '/api/v1/agent/runtime-sessions/31' && body.status === 'succeeded'));
     } finally {
         server.close();
         await once(server, 'close');
@@ -1327,6 +1486,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany task ID/);
     assert.match(output.value, /mycompany agent login/);
     assert.match(output.value, /mycompany agent identities/);
+    assert.match(output.value, /mycompany agent work --once --provider=codex\|claude\|agy/);
     assert.match(output.value, /mycompany agent credential list AGENT_ID/);
     assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
     assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=codex\|claude\|agy/);

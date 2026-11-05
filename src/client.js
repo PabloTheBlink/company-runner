@@ -1033,7 +1033,11 @@ export class AgentClient {
         if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401).');
         if (response.status === 403) throw new Error('El Agent no puede reclamar tareas en este ámbito (HTTP 403).');
         if (response.status === 404) throw new Error('La tarea no está asignada o disponible para este Agent.');
-        if (response.status === 409) throw new Error('La tarea ya tiene una reserva activa o el lease ha caducado.');
+        if (response.status === 409) {
+            const error = new Error('La tarea ya tiene una reserva activa o el lease ha caducado.');
+            error.status = 409;
+            throw error;
+        }
         const claim = response.body.claim;
         if (![200, 201].includes(response.status)
             || claim === null || typeof claim !== 'object'
@@ -2319,6 +2323,7 @@ function isRunnerAssignee(assignee) {
     return assignee !== null
         && typeof assignee === 'object'
         && ['user', 'agent'].includes(assignee.type)
+        && (assignee.type !== 'agent' || Number.isSafeInteger(assignee.id) && assignee.id > 0)
         && typeof assignee.name === 'string';
 }
 

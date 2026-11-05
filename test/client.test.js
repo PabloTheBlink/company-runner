@@ -191,7 +191,7 @@ test('agent task listing uses the Agent credential, status filter and cursor', a
                     status: 'in_progress',
                     priority: 'high',
                     due_date: null,
-                    assignee: { type: 'agent', name: 'Vera' },
+                    assignee: { type: 'agent', id: 12, name: 'Vera' },
                     workspace: null,
                 }],
                 has_more: false,
@@ -282,6 +282,39 @@ test('agent task lease claim, heartbeat and finish keep the lease token in authe
             await assert.rejects(client.claimTask(0, claimToken, companyRoot), /ID de tarea/);
             await assert.rejects(client.claimTask(26, 'short', companyRoot), /token/);
             await assert.rejects(client.finishTaskClaim(26, claimToken, 'cancelled', companyRoot), /estado final/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('agent task lease conflict is marked so a worker can try another task', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const server = createServer((_request, response) => {
+            response.writeHead(409, { 'content-type': 'application/json' });
+            response.end('{}');
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Empresa',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: 'A'.repeat(80),
+        });
+
+        try {
+            await assert.rejects(new AgentClient(configStore).claimTask(42, 'C'.repeat(80), companyRoot), (error) => {
+                assert.equal(error.status, 409);
+                return /reserva activa/.test(error.message);
+            });
         } finally {
             server.close();
             await once(server, 'close');
@@ -1499,7 +1532,7 @@ test('agent assignment sends a target Agent ID through the dedicated scoped endp
             for await (const chunk of request) requestBody += chunk;
             assert.deepEqual(JSON.parse(requestBody), { assignee_agent_id: 13 });
             response.writeHead(200, { 'content-type': 'application/json' });
-            response.end(JSON.stringify({ task: { id: 27, assignee: { type: 'agent', name: 'Marketing' } } }));
+            response.end(JSON.stringify({ task: { id: 27, assignee: { type: 'agent', id: 11, name: 'Marketing' } } }));
         });
         const serverUrl = await listen(server);
         await configStore.saveAgent({
@@ -1516,7 +1549,7 @@ test('agent assignment sends a target Agent ID through the dedicated scoped endp
         try {
             assert.deepEqual(await new AgentClient(configStore).assignTask(27, 13, companyRoot), {
                 id: 27,
-                assignee: { type: 'agent', name: 'Marketing' },
+                assignee: { type: 'agent', id: 11, name: 'Marketing' },
             });
         } finally {
             server.close();
@@ -2066,7 +2099,7 @@ test('task listing requests the authenticated runner tasks without sending local
                     status: 'in_progress',
                     priority: 'high',
                     due_date: '2026-11-30',
-                    assignee: { type: 'agent', name: 'Vera' },
+                    assignee: { type: 'agent', id: 12, name: 'Vera' },
                     workspace: { id: 9, name: 'Operaciones' },
                 }],
                 has_more: false,
@@ -2087,7 +2120,7 @@ test('task listing requests the authenticated runner tasks without sending local
             assert.equal(tasks.has_more, false);
             assert.equal(tasks.next_after, null);
             assert.equal(tasks.tasks[0].title, 'Revisar métricas');
-            assert.deepEqual(tasks.tasks[0].assignee, { type: 'agent', name: 'Vera' });
+            assert.deepEqual(tasks.tasks[0].assignee, { type: 'agent', id: 12, name: 'Vera' });
             assert.equal(JSON.stringify(tasks).includes(workspacePath), false);
         } finally {
             server.close();
