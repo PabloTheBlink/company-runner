@@ -175,6 +175,9 @@ export async function run(
                         workspaceId: options.memoryWorkspaceId,
                     }, currentDirectory)).memory.slice(0, 5);
                 }
+                const companyContext = options.includeCompanyContext
+                    ? await agentClient.getCompanyContext(identity, currentDirectory)
+                    : null;
                 const companyGrants = await configStore.listAgentFileAccessForDirectory(currentDirectory, plan.agentId);
                 if (options.publishPath !== null) {
                     if (!hasAgentCompanyPermission(identity, 'artifacts.publish')) {
@@ -201,6 +204,12 @@ export async function run(
                     publishPath: options.publishPath,
                     allowNetwork: options.allowNetwork,
                     includeMemory: options.includeMemory,
+                    includeCompanyContext: options.includeCompanyContext,
+                    companyContextSections: companyContext === null
+                        ? []
+                        : Object.entries(companyContext.sections)
+                            .filter(([, section]) => section.access === 'granted')
+                            .map(([name]) => name),
                     memoryCount: memory.length,
                     memoryTopicId: options.memoryTopicId,
                     memoryWorkspaceId: options.memoryWorkspaceId,
@@ -226,7 +235,7 @@ export async function run(
                     try {
                         result = await agentRuntimeRunner({
                             provider: options.provider,
-                            prompt: createAgentRuntimePrompt(identity, task, options.allowNetwork, memory, fileSummary.write),
+                            prompt: createAgentRuntimePrompt(identity, task, options.allowNetwork, memory, fileSummary.write, companyContext),
                             cwd: stagingRoot,
                             timeoutMs: options.timeoutSeconds * 1_000,
                             signal: controller.signal,
@@ -885,8 +894,8 @@ export function parseAgentRuntimePlanOptions(argumentsList) {
 }
 
 export function parseAgentRuntimeRunOptions(argumentsList) {
-    const usage = 'Uso: mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]].';
-    if (argumentsList.length < 2 || argumentsList.length > 9) {
+    const usage = 'Uso: mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-company-context] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]].';
+    if (argumentsList.length < 2 || argumentsList.length > 10) {
         throw new Error(usage);
     }
 
@@ -897,6 +906,7 @@ export function parseAgentRuntimeRunOptions(argumentsList) {
     let publishPath = null;
     let allowNetwork = false;
     let includeMemory = false;
+    let includeCompanyContext = false;
     let memoryQuery = null;
     let memoryTopicId = null;
     let memoryWorkspaceId = null;
@@ -913,6 +923,10 @@ export function parseAgentRuntimeRunOptions(argumentsList) {
         }
         if (argument === '--include-memory' && !includeMemory) {
             includeMemory = true;
+            continue;
+        }
+        if (argument === '--include-company-context' && !includeCompanyContext) {
+            includeCompanyContext = true;
             continue;
         }
         if (memoryQueryMatch !== null && memoryQuery === null) {
@@ -962,7 +976,7 @@ export function parseAgentRuntimeRunOptions(argumentsList) {
         throw new Error('Las opciones --memory-query, --memory-topic y --memory-workspace requieren --include-memory.');
     }
 
-    return { taskId, provider, timeoutSeconds, publishPath, allowNetwork, includeMemory, memoryQuery, memoryTopicId, memoryWorkspaceId };
+    return { taskId, provider, timeoutSeconds, publishPath, allowNetwork, includeMemory, memoryQuery, memoryTopicId, memoryWorkspaceId, includeCompanyContext };
 }
 
 function hasAgentCompanyPermission(identity, permissionName) {
@@ -984,7 +998,7 @@ function getAgentRuntimeTaskFingerprint(task) {
     });
 }
 
-function createAgentRuntimePrompt(identity, task, allowNetwork = false, memory = [], writePaths = []) {
+function createAgentRuntimePrompt(identity, task, allowNetwork = false, memory = [], writePaths = [], companyContext = null) {
     const taskContext = {
         company: identity.company.name,
         agent: { name: identity.agent.name, role: identity.agent.role },
@@ -1010,6 +1024,9 @@ function createAgentRuntimePrompt(identity, task, allowNetwork = false, memory =
             relevance: entry.relevance,
         })),
     };
+    if (companyContext !== null) {
+        taskContext.company_context = companyContext;
+    }
     const fileWriteRule = writePaths.length > 0
         ? `Puedes crear o editar archivos solo en estas rutas autorizadas para write: ${JSON.stringify(writePaths)}.`
         : 'No tienes permiso para crear ni editar archivos.';
@@ -1056,6 +1073,12 @@ async function confirmAgentRuntimeExecution(request, streams) {
             ].filter(Boolean).join(' · ');
             streams.stderr.write(`La búsqueda se limitará además a ${scope}; MyCompanies vuelve a aplicar los permisos vigentes.\n`);
         }
+    }
+    if (request.includeCompanyContext) {
+        const sections = request.companyContextSections.length === 0
+            ? 'ninguna sección (sin permisos de lectura adicionales)'
+            : request.companyContextSections.join(', ');
+        streams.stderr.write(`Se enviará contexto actual de MyCompanies: ${safeTerminalText(sections)}. El token permanece en el CLI.\n`);
     }
     streams.stderr.write(`Confirma escribiendo exactamente ${confirmation}:\n`);
     for (const filePath of request.fileSummary.read) streams.stderr.write(`  read · ${safeTerminalText(filePath)}\n`);
@@ -1709,11 +1732,12 @@ function printHelp(stdout) {
     stdout.write('    Detecta Codex, Claude Code y Antigravity CLI (agy) en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
     stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude|agy\n');
     stdout.write('    Comprueba identidad, acceso a tarea y asignación del Agent. Solo muestra un plan; no inicia un modelo.\n');
-    stdout.write('  mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]]\n');
+    stdout.write('  mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-company-context] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]]\n');
     stdout.write('    Ejecuta una tarea asignada con Codex o AgY en Linux, tras confirmación escrita; envía la descripción y archivos read al proveedor.\n');
     stdout.write('    Usa el sandbox del proveedor, aplica solo rutas con permiso write y elimina el staging al terminar. La red está deshabilitada por defecto.\n');
     stdout.write('    --allow-network habilita red abierta solo para Codex y exige confirmación explícita; no restringe dominios. Claude sigue en preflight.\n');
     stdout.write('    --include-memory añade hasta cinco recuerdos autorizados; query sustituye el texto derivado de la tarea y topic/workspace estrechan el ámbito.\n');
+    stdout.write('    --include-company-context consulta secciones de lectura permitidas y envía resúmenes limitados; no comparte credenciales ni permite consultas desde el modelo.\n');
     stdout.write('    --publish publica un único archivo .md, .txt o .pdf autorizado localmente y con artifacts.publish; la confirmación indica qué archivo se envía.\n');
     stdout.write('  mycompany agent runtime files list | grant RUTA --operation=read|write | revoke RUTA --operation=read|write\n');
     stdout.write('    Administra permisos de archivos locales para la identidad Agent seleccionada. grant y revoke requieren confirmación escrita en un terminal interactivo.\n');

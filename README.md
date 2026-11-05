@@ -73,6 +73,8 @@ The CLI now provides `mycompany agent runtime run TASK_ID --provider=codex` and 
 
 For a memory-enabled run, `--include-memory` defaults to a search made from the task title and description. Use `--memory-query="TEXT"` to replace that search text, `--memory-topic=ID` to narrow it to a topic, and `--memory-workspace=ID` to narrow it to a workspace. These options require `--include-memory`; filters can only reduce results because the server applies the Agent's current company grants. The runtime still sends at most five results after the existing typed confirmation. For example: `mycompany agent runtime run 136 --provider=codex --include-memory --memory-query="systemctl approval sandbox" --memory-topic=7`. The query is sent to MyCompanies' memory search API and is not itself inserted in the model prompt.
 
+`--include-company-context` is a separate opt-in. Before starting the provider, the CLI uses the Agent credential to read tasks, goals, Workspaces, assets, bets, offers, and artifacts where the identity has a matching read or management grant. MyCompanies applies company and Workspace scope on each request. The confirmation lists the sections that will be sent; the credential stays in the CLI. The context includes at most ten summaries per section, marks sections the Agent cannot access separately from empty lists, and stops before model launch if the serialized context exceeds 64 KiB. This is a point-in-time snapshot from the server, not an on-demand tool for the model. Memory remains separate and is included only with `--include-memory`.
+
 Later, run commands from that company root or any folder inside it:
 
 ```sh

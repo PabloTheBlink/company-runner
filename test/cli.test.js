@@ -80,6 +80,7 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         memoryQuery: null,
         memoryTopicId: null,
         memoryWorkspaceId: null,
+        includeCompanyContext: false,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--timeout=600', '--provider=agy']), {
         taskId: 42,
@@ -91,6 +92,7 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         memoryQuery: null,
         memoryTopicId: null,
         memoryWorkspaceId: null,
+        includeCompanyContext: false,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=reports/daily.md']), {
         taskId: 42,
@@ -102,6 +104,7 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         memoryQuery: null,
         memoryTopicId: null,
         memoryWorkspaceId: null,
+        includeCompanyContext: false,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=codex']), {
         taskId: 42,
@@ -113,7 +116,10 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         memoryQuery: null,
         memoryTopicId: null,
         memoryWorkspaceId: null,
+        includeCompanyContext: false,
     });
+    assert.equal(parseAgentRuntimeRunOptions(['42', '--provider=codex', '--include-company-context']).includeCompanyContext, true);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=codex', '--include-company-context', '--include-company-context']), /desconocida o repetida/);
     assert.equal(parseAgentRuntimeRunOptions(['42', '--provider=codex', '--include-memory']).includeMemory, true);
     assert.deepEqual(parseAgentRuntimeRunOptions([
         '42', '--provider=codex', '--include-memory', '--memory-query=systemctl approval sandbox', '--memory-topic=9', '--memory-workspace=4',
@@ -127,6 +133,7 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         memoryQuery: 'systemctl approval sandbox',
         memoryTopicId: 9,
         memoryWorkspaceId: 4,
+        includeCompanyContext: false,
     });
     assert.equal(parseAgentRuntimeRunOptions(['42', '--provider=codex', '--allow-network']).allowNetwork, true);
     assert.throws(() => parseAgentRuntimeRunOptions(['0', '--provider=agy']), /positivo/);
@@ -300,22 +307,47 @@ test('agent runtime run stages only granted files, applies only authorized write
                 company: { id: 4, name: 'Devetty' },
                 permissions: [
                     { name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'goals.read', scope: 'company', workspace_id: null, workspace_name: null },
                     { name: 'artifacts.publish', scope: 'company', workspace_id: null, workspace_name: null },
                 ],
             }));
             return;
         }
-        assert.equal(request.url, '/api/v1/agent/tasks/42');
-        response.end(JSON.stringify({ task: {
-            id: 42,
-            title: 'Preparar informe',
-            description: 'Revisa los archivos autorizados y resume el estado.',
-            status: 'in_progress',
-            priority: 'normal',
-            due_date: null,
-            assignee: { type: 'agent', id: 12, name: 'Vera' },
-            workspace: { id: 5, name: 'Operaciones' },
-        } }));
+        if (request.url === '/api/v1/agent/tasks/42') {
+            response.end(JSON.stringify({ task: {
+                id: 42,
+                title: 'Preparar informe',
+                description: 'Revisa los archivos autorizados y resume el estado.',
+                status: 'in_progress',
+                priority: 'normal',
+                due_date: null,
+                assignee: { type: 'agent', id: 12, name: 'Vera' },
+                workspace: { id: 5, name: 'Operaciones' },
+            } }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks') {
+            response.end(JSON.stringify({
+                tasks: [{ id: 42, title: 'Preparar informe', status: 'in_progress', priority: 'normal', due_date: null, assignee: { type: 'agent', id: 12, name: 'Vera' }, workspace: { id: 5, name: 'Operaciones' } }],
+                has_more: false,
+                next_after: null,
+            }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/goals') {
+            response.end(JSON.stringify({ goals: [{ id: 1, title: 'Primer euro', status: 'active', target_date: null }], has_more: false, next_after: null }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/artifacts') {
+            response.end(JSON.stringify({
+                artifacts: [{ id: 9, title: 'Informe anterior', description: null, source: 'task #3', original_filename: 'prior.md', mime_type: 'text/markdown', size_bytes: 20, sha256: 'a'.repeat(64), created_at: '2026-11-04T10:00:00Z', uploaded_by: null }],
+                has_more: false,
+                next_after: null,
+            }));
+            return;
+        }
+        response.writeHead(404);
+        response.end();
     });
     await mkdir(companyRoot);
     await mkdir(path.join(configRoot), { mode: 0o700 });
@@ -355,6 +387,9 @@ test('agent runtime run stages only granted files, applies only authorized write
         assert.match(request.prompt, /Revisa los archivos autorizados/);
         assert.match(request.prompt, /Puedes crear o editar archivos solo en estas rutas autorizadas para write: \["\.env","reports\/daily\.md"\]/);
         assert.doesNotMatch(request.prompt, /Trabaja solo con archivos presentes en el staging/);
+        assert.match(request.prompt, /"title":"Primer euro"/);
+        assert.match(request.prompt, /"title":"Informe anterior"/);
+        assert.doesNotMatch(request.prompt, /api_token|Bearer/);
         assert.equal(await readFile(path.join(request.cwd, '.env'), 'utf8'), 'KEY=original\n');
         await assert.rejects(stat(path.join(request.cwd, 'reports', 'daily.md')), { code: 'ENOENT' });
         await writeFile(path.join(request.cwd, '.env'), 'KEY=updated\n');
@@ -376,7 +411,7 @@ test('agent runtime run stages only granted files, applies only authorized write
 
     try {
         assert.equal(await run(
-            ['agent', 'runtime', 'run', '42', '--provider=codex', '--allow-network', '--publish=reports/daily.md'],
+            ['agent', 'runtime', 'run', '42', '--provider=codex', '--allow-network', '--include-company-context', '--publish=reports/daily.md'],
             { stdout: output, stderr: output },
             companyRoot,
             configStore,
@@ -386,7 +421,10 @@ test('agent runtime run stages only granted files, applies only authorized write
             agentRuntimeConfirmer,
             artifactPublisher,
         ), 0);
-        assert.deepEqual(requests, ['/api/v1/agent/me', '/api/v1/agent/tasks/42', '/api/v1/agent/tasks/42']);
+        assert.deepEqual(requests, [
+            '/api/v1/agent/me', '/api/v1/agent/tasks/42', '/api/v1/agent/tasks', '/api/v1/agent/goals',
+            '/api/v1/agent/artifacts', '/api/v1/agent/tasks/42',
+        ]);
         assert.equal(taskRunnerCalls.length, 1);
         assert.equal(taskRunnerCalls[0].provider, 'codex');
         assert.equal(taskRunnerCalls[0].allowNetwork, true);
@@ -397,6 +435,8 @@ test('agent runtime run stages only granted files, applies only authorized write
         });
         assert.equal(confirmations[0].publishPath, 'reports/daily.md');
         assert.equal(confirmations[0].allowNetwork, true);
+        assert.equal(confirmations[0].includeCompanyContext, true);
+        assert.deepEqual(confirmations[0].companyContextSections, ['tasks', 'goals', 'artifacts']);
         assert.deepEqual(publishedArtifacts, [{
             filePath: 'reports/daily.md',
             metadata: { title: 'Preparar informe', source: 'MyCompanies task #42' },
@@ -1006,6 +1046,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent credential list AGENT_ID/);
     assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
     assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=codex\|agy/);
+    assert.match(output.value, /--include-company-context/);
     assert.match(output.value, /red está deshabilitada por defecto/);
     assert.match(output.value, /red abierta solo para Codex/);
     assert.match(output.value, /confirmación escrita en un terminal interactivo/);

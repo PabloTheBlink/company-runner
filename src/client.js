@@ -7,6 +7,8 @@ const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
 const MAX_EXECUTION_RESULT_BYTES = 65_536;
+const MAX_COMPANY_CONTEXT_BYTES = 65_536;
+const MAX_COMPANY_CONTEXT_ITEMS = 10;
 const ARTIFACT_EXTENSIONS = new Set(['.md', '.txt', '.pdf']);
 
 export function normalizeServerUrl(serverUrl, allowInsecureLocalhost = false) {
@@ -454,6 +456,44 @@ export class AgentClient {
             throw new Error('La identidad Agent del servidor no coincide con la configuración local.');
         }
         return identity;
+    }
+
+    async getCompanyContext(identity, currentDirectory = process.cwd()) {
+        const definitions = [
+            { name: 'tasks', permissions: ['tasks.read', 'tasks.manage'], collection: 'tasks', load: () => this.listTasks(currentDirectory), map: mapTaskContext },
+            { name: 'goals', permissions: ['goals.read', 'goals.manage'], collection: 'goals', load: () => this.listGoals(currentDirectory), map: mapGoalContext },
+            { name: 'workspaces', permissions: ['workspaces.read', 'workspaces.manage'], collection: 'workspaces', load: () => this.listWorkspaces(currentDirectory), map: mapWorkspaceContext },
+            { name: 'assets', permissions: ['assets.read', 'assets.manage'], collection: 'assets', load: () => this.listAssets(currentDirectory), map: mapAssetContext },
+            { name: 'bets', permissions: ['bets.read', 'bets.manage'], collection: 'bets', load: () => this.listBets(currentDirectory), map: mapBetContext },
+            { name: 'offers', permissions: ['offers.read', 'offers.manage'], collection: 'offers', load: () => this.listOffers(currentDirectory), map: mapOfferContext },
+            { name: 'artifacts', permissions: ['artifacts.read', 'artifacts.publish'], collection: 'artifacts', load: () => this.listArtifacts(currentDirectory), map: mapArtifactContext },
+        ];
+        const sections = {};
+
+        for (const definition of definitions) {
+            if (!hasAgentPermission(identity, definition.permissions)) {
+                sections[definition.name] = { access: 'not_granted' };
+                continue;
+            }
+
+            const result = await definition.load();
+            const records = result[definition.collection];
+            sections[definition.name] = {
+                access: 'granted',
+                items: records.slice(0, MAX_COMPANY_CONTEXT_ITEMS).map(definition.map),
+                truncated: result.has_more || records.length > MAX_COMPANY_CONTEXT_ITEMS,
+            };
+        }
+
+        const context = {
+            retrieved_at: new Date().toISOString(),
+            sections,
+        };
+        if (Buffer.byteLength(JSON.stringify(context), 'utf8') > MAX_COMPANY_CONTEXT_BYTES) {
+            throw new Error('El contexto empresarial autorizado supera el límite de tamaño; no se inició el proveedor.');
+        }
+
+        return context;
     }
 
     async forget(currentDirectory = process.cwd()) {
@@ -2191,7 +2231,56 @@ function isArtifactSummary(artifact) {
             || (typeof artifact.uploaded_by === 'object'
                 && artifact.uploaded_by.type === 'agent'
                 && Number.isSafeInteger(artifact.uploaded_by.id)
-                && typeof artifact.uploaded_by.name === 'string'));
+            && typeof artifact.uploaded_by.name === 'string'));
+}
+
+function hasAgentPermission(identity, permissionNames) {
+    return Array.isArray(identity?.permissions)
+        && identity.permissions.some((permission) => permissionNames.includes(permission?.name));
+}
+
+function mapTaskContext(task) {
+    return {
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        priority: task.priority,
+        due_date: task.due_date,
+        assignee: task.assignee === null ? null : { type: task.assignee.type, name: task.assignee.name },
+        workspace: task.workspace === null ? null : { id: task.workspace.id, name: task.workspace.name },
+    };
+}
+
+function mapGoalContext(goal) {
+    return { id: goal.id, title: goal.title, status: goal.status, target_date: goal.target_date };
+}
+
+function mapWorkspaceContext(workspace) {
+    return { id: workspace.id, name: workspace.name, status: workspace.status };
+}
+
+function mapAssetContext(asset) {
+    return { id: asset.id, name: asset.name, type: asset.type, url: asset.url };
+}
+
+function mapBetContext(bet) {
+    return { id: bet.id, title: bet.title, status: bet.status };
+}
+
+function mapOfferContext(offer) {
+    return { id: offer.id, name: offer.name, type: offer.type, status: offer.status, bet_id: offer.bet_id };
+}
+
+function mapArtifactContext(artifact) {
+    return {
+        id: artifact.id,
+        title: artifact.title,
+        original_filename: artifact.original_filename,
+        mime_type: artifact.mime_type,
+        size_bytes: artifact.size_bytes,
+        created_at: artifact.created_at,
+        source: artifact.source,
+    };
 }
 
 function validateOptionalPositiveId(value, label, required = false) {

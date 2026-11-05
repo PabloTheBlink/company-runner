@@ -2270,3 +2270,117 @@ test('Agent memory client lists only authorized topics, reads scoped entries, an
         }
     });
 });
+
+test('Agent company context fetches only granted domains and marks denied domains distinctly from empty lists', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const token = 'A'.repeat(80);
+        const requestedPaths = [];
+        const server = createServer((request, response) => {
+            requestedPaths.push(request.url);
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            if (request.url === '/api/v1/agent/tasks') {
+                response.end(JSON.stringify({
+                    tasks: [{
+                        id: 4,
+                        title: 'Contactar clientes',
+                        status: 'open',
+                        priority: 'high',
+                        due_date: null,
+                        assignee: null,
+                        workspace: null,
+                        description: 'No debe incluirse en el resumen.',
+                    }],
+                    has_more: true,
+                    next_after: 4,
+                }));
+                return;
+            }
+            if (request.url === '/api/v1/agent/goals') {
+                response.end(JSON.stringify({
+                    goals: [{ id: 2, title: 'Primer cliente', status: 'active', target_date: null }],
+                    has_more: false,
+                    next_after: null,
+                }));
+                return;
+            }
+            if (request.url === '/api/v1/agent/offers') {
+                response.end(JSON.stringify({ offers: [], has_more: false, next_after: null }));
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        const serverUrl = await listen(server);
+        const identity = {
+            permissions: [
+                { name: 'tasks.read', scope: 'company' },
+                { name: 'goals.read', scope: 'company' },
+                { name: 'offers.read', scope: 'company' },
+            ],
+        };
+        const configStore = {
+            async loadAgentForDirectory() {
+                return { server_url: serverUrl, allow_insecure_localhost: true, api_token: token };
+            },
+        };
+        const client = new AgentClient(configStore);
+
+        try {
+            const context = await client.getCompanyContext(identity, companyRoot);
+
+            assert.deepEqual(requestedPaths, ['/api/v1/agent/tasks', '/api/v1/agent/goals', '/api/v1/agent/offers']);
+            assert.equal(context.sections.tasks.access, 'granted');
+            assert.equal(context.sections.tasks.truncated, true);
+            assert.deepEqual(context.sections.tasks.items, [{
+                id: 4,
+                title: 'Contactar clientes',
+                status: 'open',
+                priority: 'high',
+                due_date: null,
+                assignee: null,
+                workspace: null,
+            }]);
+            assert.deepEqual(context.sections.goals.items, [{ id: 2, title: 'Primer cliente', status: 'active', target_date: null }]);
+            assert.deepEqual(context.sections.offers, { access: 'granted', items: [], truncated: false });
+            assert.deepEqual(context.sections.assets, { access: 'not_granted' });
+            assert.equal(JSON.stringify(context).includes(token), false);
+            assert.equal(JSON.stringify(context).includes('No debe incluirse'), false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
+test('Agent company context caps records and refuses an oversized prompt payload', async () => {
+    const client = new AgentClient({});
+    const task = (id, title) => ({
+        id,
+        title,
+        status: 'open',
+        priority: 'normal',
+        due_date: null,
+        assignee: null,
+        workspace: null,
+    });
+    client.listTasks = async () => ({
+        tasks: Array.from({ length: 12 }, (_, index) => task(index + 1, `Task ${index + 1}`)),
+        has_more: false,
+    });
+
+    const context = await client.getCompanyContext({ permissions: [{ name: 'tasks.read', scope: 'company' }] });
+    assert.equal(context.sections.tasks.items.length, 10);
+    assert.equal(context.sections.tasks.truncated, true);
+
+    client.listTasks = async () => ({
+        tasks: Array.from({ length: 10 }, (_, index) => task(index + 1, 'x'.repeat(8_000))),
+        has_more: false,
+    });
+    await assert.rejects(
+        client.getCompanyContext({ permissions: [{ name: 'tasks.read', scope: 'company' }] }),
+        /supera el límite de tamaño/,
+    );
+});
