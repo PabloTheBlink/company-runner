@@ -44,6 +44,10 @@ test('company initialization creates assistant instructions and the fixed compan
             assert.match(instructions, /do not assume.*config file/i);
             assert.match(instructions, /company situation|company assessment/i);
             assert.match(instructions, /current CLI state/);
+            assert.match(instructions, /follow the company's operating policy/i);
+            assert.match(instructions, /routine internal decisions.*without asking the owner/i);
+            assert.match(instructions, /effective permissions allow them/i);
+            assert.match(instructions, /external actions and recurring automations.*configured capability/i);
         }
         assert.match(await readFile(path.join(directory, 'automations/README.md'), 'utf8'), /Each automation lives/);
         assert.match(await readFile(path.join(directory, 'reports/README.md'), 'utf8'), /company records/);
