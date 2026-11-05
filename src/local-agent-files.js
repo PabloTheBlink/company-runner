@@ -23,7 +23,9 @@ export async function stageLocalAgentFiles({ agentId, grants, companyRoot, stagi
         const stagedContent = operations.includes('read') ? originalContent : Buffer.alloc(0);
         const stagedPath = path.join(roots.stagingRoot, ...relativePath.split('/'));
         await mkdir(path.dirname(stagedPath), { recursive: true, mode: 0o700 });
-        await writeFile(stagedPath, stagedContent, { flag: 'wx', mode: 0o600 });
+        if (existed) {
+            await writeFile(stagedPath, stagedContent, { flag: 'wx', mode: 0o600 });
+        }
 
         stagedEntries.push({
             path: relativePath,

@@ -62,7 +62,7 @@ export function buildCodexInvocation({ prompt, cwd, timeoutMs, allowNetwork = fa
         command: 'codex',
         args: [
             'exec',
-            '--sandbox', 'workspace-write',
+            '--approve-for-me',
             '--ephemeral',
             '--json',
             '--skip-git-repo-check',

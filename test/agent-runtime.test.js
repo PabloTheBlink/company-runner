@@ -4,13 +4,13 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { buildAntigravityInvocation, buildCodexInvocation, runAgentRuntime, runAntigravityAgent, runCodexAgent } from '../src/agent-runtime.js';
 
-test('Codex invocation is ephemeral, workspace-write sandboxed, and network-disabled', () => {
+test('Codex invocation uses reviewed workspace-write, is ephemeral, and disables network', () => {
     const invocation = buildCodexInvocation({ prompt: 'private task text', cwd: '/private/staging', timeoutMs: 60_000 });
 
     assert.equal(invocation.command, 'codex');
     assert.ok(invocation.args.includes('exec'));
-    assert.ok(invocation.args.includes('--sandbox'));
-    assert.ok(invocation.args.includes('workspace-write'));
+    assert.ok(invocation.args.includes('--approve-for-me'));
+    assert.equal(invocation.args.includes('--sandbox'), false);
     assert.ok(invocation.args.includes('--ephemeral'));
     assert.ok(invocation.args.includes('--json'));
     assert.ok(invocation.args.includes('--ignore-user-config'));
@@ -34,7 +34,8 @@ test('Codex process receives task input over stdin and parses only the final age
     let receivedInput = '';
     const spawnImplementation = (command, args, options) => {
         assert.equal(command, '/usr/local/bin/codex');
-        assert.ok(args.includes('--sandbox'));
+        assert.ok(args.includes('--approve-for-me'));
+        assert.equal(args.includes('--sandbox'), false);
         receivedOptions = { command, args, ...options };
         const child = createFakeChild();
         child.stdin.on('data', (chunk) => { receivedInput += chunk.toString(); });

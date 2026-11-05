@@ -71,6 +71,26 @@ test('write-only grants stage a blank file and may update the authorized target'
     });
 });
 
+test('write grants leave a new file absent in staging so the Agent can create it', async () => {
+    for (const operations of [['write'], ['read', 'write']]) {
+        await withLocalFileWorkspace(async ({ companyRoot, stagingRoot }) => {
+            await mkdir(path.join(companyRoot, 'reports'));
+            const grants = [{ agentId: 12, path: 'reports/brief.md', operations }];
+            const workspace = await stageLocalAgentFiles({ agentId: 12, grants, companyRoot, stagingRoot });
+            const stagedPath = path.join(stagingRoot, 'reports', 'brief.md');
+
+            await assert.rejects(lstat(stagedPath), { code: 'ENOENT' });
+            await writeFile(stagedPath, '# Company brief\n');
+
+            const writtenPaths = await applyLocalAgentFileWrites({ agentId: 12, grants, companyRoot, stagingRoot, workspace });
+
+            assert.deepEqual(writtenPaths, ['reports/brief.md']);
+            assert.equal(await readFile(path.join(companyRoot, 'reports', 'brief.md'), 'utf8'), '# Company brief\n');
+            assert.equal((await lstat(path.join(companyRoot, 'reports', 'brief.md'))).mode & 0o777, 0o600);
+        });
+    }
+});
+
 test('refuses to overwrite a company file changed after staging', async () => {
     await withLocalFileWorkspace(async ({ companyRoot, stagingRoot }) => {
         const targetPath = path.join(companyRoot, '.env');

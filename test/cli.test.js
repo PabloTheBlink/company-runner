@@ -353,8 +353,10 @@ test('agent runtime run stages only granted files, applies only authorized write
         assert.notEqual(request.cwd, companyRoot);
         assert.match(request.prompt, /Preparar informe/);
         assert.match(request.prompt, /Revisa los archivos autorizados/);
+        assert.match(request.prompt, /Puedes crear o editar archivos solo en estas rutas autorizadas para write: \["\.env","reports\/daily\.md"\]/);
+        assert.doesNotMatch(request.prompt, /Trabaja solo con archivos presentes en el staging/);
         assert.equal(await readFile(path.join(request.cwd, '.env'), 'utf8'), 'KEY=original\n');
-        assert.equal(await readFile(path.join(request.cwd, 'reports', 'daily.md'), 'utf8'), '');
+        await assert.rejects(stat(path.join(request.cwd, 'reports', 'daily.md')), { code: 'ENOENT' });
         await writeFile(path.join(request.cwd, '.env'), 'KEY=updated\n');
         await writeFile(path.join(request.cwd, 'reports', 'daily.md'), 'Resumen\n');
         await writeFile(path.join(request.cwd, 'unapproved.md'), 'No aplicar\n');
