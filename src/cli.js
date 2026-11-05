@@ -241,11 +241,23 @@ export async function run(
                         companyRoot: currentDirectory,
                         stagingRoot,
                     });
+                    let runtimeSession = null;
+                    try {
+                        runtimeSession = await agentClient.startRuntimeSession(options.taskId, options.provider, currentDirectory);
+                    } catch {
+                        streams.stderr.write('No se pudo publicar el estado de ejecución en MyCompanies; la sesión local seguirá con sus permisos actuales.\n');
+                    }
                     streams.stdout.write(`Agente ${safeTerminalText(plan.agentName)} trabajando en la tarea #${plan.taskId}. Ctrl-C interrumpe la sesión.\n`);
                     const controller = new AbortController();
                     const handleInterrupt = () => controller.abort();
                     process.once('SIGINT', handleInterrupt);
                     process.once('SIGTERM', handleInterrupt);
+                    const runtimeHeartbeat = runtimeSession === null
+                        ? null
+                        : setInterval(() => {
+                            agentClient.updateRuntimeSession(runtimeSession.id, 'running', 'working', currentDirectory).catch(() => {});
+                        }, 10_000);
+                    runtimeHeartbeat?.unref?.();
                     let result;
                     try {
                         result = await agentRuntimeRunner({
@@ -256,41 +268,57 @@ export async function run(
                             signal: controller.signal,
                             allowNetwork: options.allowNetwork,
                         });
+                        if (typeof result?.response !== 'string') {
+                            throw new Error('El proveedor no devolvió un resultado válido; no se aplicaron cambios locales.');
+                        }
+                        const currentTask = await agentClient.getTask(options.taskId, currentDirectory);
+                        createAgentRuntimePlan(options.provider, installedRuntimes.map(({ provider }) => provider), identity, currentTask);
+                        if (getAgentRuntimeTaskFingerprint(task) !== getAgentRuntimeTaskFingerprint(currentTask)) {
+                            throw new Error('La tarea cambió mientras el proveedor trabajaba; no se aplicaron cambios locales ni se publicó un informe.');
+                        }
+                        if (runtimeSession !== null) {
+                            await agentClient.updateRuntimeSession(runtimeSession.id, 'running', 'applying_files', currentDirectory).catch(() => {});
+                        }
+                        const writtenPaths = await applyLocalAgentFileWrites({
+                            agentId: plan.agentId,
+                            grants: fileGrants,
+                            companyRoot: currentDirectory,
+                            stagingRoot,
+                            workspace,
+                        });
+                        streams.stdout.write(`\nResultado de ${safeTerminalText(plan.agentName)}:\n${safeTerminalText(result.response)}\n`);
+                        if (writtenPaths.length > 0) {
+                            streams.stdout.write(`Archivos actualizados: ${writtenPaths.map(safeTerminalText).join(', ')}.\n`);
+                        } else {
+                            streams.stdout.write('No se aplicaron cambios a archivos de la empresa.\n');
+                        }
+                        if (options.publishPath !== null) {
+                            if (runtimeSession !== null) {
+                                await agentClient.updateRuntimeSession(runtimeSession.id, 'running', 'publishing', currentDirectory).catch(() => {});
+                            }
+                            const publishArtifact = agentArtifactPublisher
+                                ?? ((filePath, metadata, directory) => agentClient.publishArtifact(filePath, metadata, directory));
+                            const artifact = await publishArtifact(options.publishPath, {
+                                title: plan.taskTitle,
+                                source: `MyCompanies task #${plan.taskId}`,
+                            }, currentDirectory);
+                            streams.stdout.write(`Informe #${artifact.id} publicado para ${safeTerminalText(artifact.title)} (${safeTerminalText(artifact.original_filename)}).\n`);
+                        }
+                        if (runtimeSession !== null) {
+                            await agentClient.updateRuntimeSession(runtimeSession.id, 'succeeded', 'completed', currentDirectory).catch(() => {});
+                        }
+                        return 0;
+                    } catch (error) {
+                        if (runtimeSession !== null) {
+                            const status = controller.signal.aborted ? 'interrupted' : 'failed';
+                            await agentClient.updateRuntimeSession(runtimeSession.id, status, status, currentDirectory).catch(() => {});
+                        }
+                        throw error;
                     } finally {
+                        if (runtimeHeartbeat !== null) clearInterval(runtimeHeartbeat);
                         process.removeListener('SIGINT', handleInterrupt);
                         process.removeListener('SIGTERM', handleInterrupt);
                     }
-                    if (typeof result?.response !== 'string') {
-                        throw new Error('El proveedor no devolvió un resultado válido; no se aplicaron cambios locales.');
-                    }
-                    const currentTask = await agentClient.getTask(options.taskId, currentDirectory);
-                    createAgentRuntimePlan(options.provider, installedRuntimes.map(({ provider }) => provider), identity, currentTask);
-                    if (getAgentRuntimeTaskFingerprint(task) !== getAgentRuntimeTaskFingerprint(currentTask)) {
-                        throw new Error('La tarea cambió mientras el proveedor trabajaba; no se aplicaron cambios locales ni se publicó un informe.');
-                    }
-                    const writtenPaths = await applyLocalAgentFileWrites({
-                        agentId: plan.agentId,
-                        grants: fileGrants,
-                        companyRoot: currentDirectory,
-                        stagingRoot,
-                        workspace,
-                    });
-                    streams.stdout.write(`\nResultado de ${safeTerminalText(plan.agentName)}:\n${safeTerminalText(result.response)}\n`);
-                    if (writtenPaths.length > 0) {
-                        streams.stdout.write(`Archivos actualizados: ${writtenPaths.map(safeTerminalText).join(', ')}.\n`);
-                    } else {
-                        streams.stdout.write('No se aplicaron cambios a archivos de la empresa.\n');
-                    }
-                    if (options.publishPath !== null) {
-                        const publishArtifact = agentArtifactPublisher
-                            ?? ((filePath, metadata, directory) => agentClient.publishArtifact(filePath, metadata, directory));
-                        const artifact = await publishArtifact(options.publishPath, {
-                            title: plan.taskTitle,
-                            source: `MyCompanies task #${plan.taskId}`,
-                        }, currentDirectory);
-                        streams.stdout.write(`Informe #${artifact.id} publicado para ${safeTerminalText(artifact.title)} (${safeTerminalText(artifact.original_filename)}).\n`);
-                    }
-                    return 0;
                 } finally {
                     await rm(stagingRoot, { recursive: true, force: true });
                 }
@@ -1753,6 +1781,8 @@ function printHelp(stdout) {
     stdout.write('  mycompany agent runtime run TASK_ID --provider=codex|claude|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-company-context] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]]\n');
     stdout.write('    Ejecuta una tarea asignada con Codex, Claude Code o AgY en Linux, tras confirmación escrita; envía la descripción y archivos read al proveedor.\n');
     stdout.write('    Usa el sandbox del proveedor, aplica solo rutas con permiso write y elimina el staging al terminar. La red está deshabilitada por defecto.\n');
+    stdout.write('    Informa a MyCompanies del estado y la fase de la sesión para mostrarla en la web; no envía prompts ni respuestas del modelo.\n');
+    stdout.write('    Envía una señal cada 10 segundos mientras trabaja. Si el servidor no está disponible, la ejecución local continúa.\n');
     stdout.write('    Claude Code usa --restricted con Read, Write y Edit limitados al staging; no dispone de terminal, web ni MCP. La prueba real con el proveedor está pendiente.\n');
     stdout.write('    --allow-network habilita red abierta solo para Codex y exige confirmación explícita; no restringe dominios. Claude y AgY mantienen la red deshabilitada.\n');
     stdout.write('    --include-memory añade hasta cinco recuerdos autorizados; query sustituye el texto derivado de la tarea y topic/workspace estrechan el ámbito.\n');

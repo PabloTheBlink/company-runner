@@ -314,9 +314,51 @@ test('agent runtime run stages only granted files, applies only authorized write
     const configRoot = path.join(testRoot, 'config');
     const token = 'P'.repeat(80);
     const requests = [];
+    const runtimeReports = [];
     const server = createServer((request, response) => {
-        requests.push(request.url);
+        if (request.method === 'GET') requests.push(request.url);
         assert.equal(request.headers.authorization, `Bearer ${token}`);
+        if (request.method === 'POST' && request.url === '/api/v1/agent/runtime-sessions') {
+            let body = '';
+            request.on('data', (chunk) => { body += chunk; });
+            request.on('end', () => {
+                runtimeReports.push({ method: request.method, body: JSON.parse(body) });
+                response.writeHead(201, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ session: {
+                    id: 31,
+                    agent_id: 12,
+                    task_id: 42,
+                    provider: 'codex',
+                    status: 'running',
+                    phase: 'starting',
+                    started_at: '2026-11-05T12:00:00Z',
+                    last_reported_at: '2026-11-05T12:00:00Z',
+                    finished_at: null,
+                } }));
+            });
+            return;
+        }
+        if (request.method === 'PATCH' && request.url === '/api/v1/agent/runtime-sessions/31') {
+            let body = '';
+            request.on('data', (chunk) => { body += chunk; });
+            request.on('end', () => {
+                const update = JSON.parse(body);
+                runtimeReports.push({ method: request.method, body: update });
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ session: {
+                    id: 31,
+                    agent_id: 12,
+                    task_id: 42,
+                    provider: 'codex',
+                    status: update.status,
+                    phase: update.phase,
+                    started_at: '2026-11-05T12:00:00Z',
+                    last_reported_at: '2026-11-05T12:01:00Z',
+                    finished_at: update.status === 'running' ? null : '2026-11-05T12:01:00Z',
+                } }));
+            });
+            return;
+        }
         response.writeHead(200, { 'content-type': 'application/json' });
         if (request.url === '/api/v1/agent/me') {
             response.end(JSON.stringify({
@@ -441,6 +483,12 @@ test('agent runtime run stages only granted files, applies only authorized write
         assert.deepEqual(requests, [
             '/api/v1/agent/me', '/api/v1/agent/tasks/42', '/api/v1/agent/tasks', '/api/v1/agent/goals',
             '/api/v1/agent/artifacts', '/api/v1/agent/tasks/42',
+        ]);
+        assert.deepEqual(runtimeReports, [
+            { method: 'POST', body: { task_id: 42, provider: 'codex' } },
+            { method: 'PATCH', body: { status: 'running', phase: 'applying_files' } },
+            { method: 'PATCH', body: { status: 'running', phase: 'publishing' } },
+            { method: 'PATCH', body: { status: 'succeeded', phase: 'completed' } },
         ]);
         assert.equal(taskRunnerCalls.length, 1);
         assert.equal(taskRunnerCalls[0].provider, 'codex');
@@ -574,6 +622,7 @@ test('agent runtime includes memory only when requested and within the Agent rea
             '/api/v1/agent/me',
             '/api/v1/agent/tasks/42',
             '/api/v1/agent/memory/search?q=systemctl+approval+sandbox&topic_id=9&workspace_id=4',
+            '/api/v1/agent/runtime-sessions',
             '/api/v1/agent/tasks/42',
         ]);
         assert.equal(confirmations[0].includeMemory, true);
@@ -658,7 +707,7 @@ test('agent runtime run discards staged output if task instructions change while
         ), /La tarea cambió mientras el proveedor trabajaba/);
         assert.equal(await readFile(path.join(companyRoot, 'reports', 'weekly.md'), 'utf8'), 'Original approved report\n');
         assert.equal(publishCalls, 0);
-        assert.deepEqual(requestPaths, ['/api/v1/agent/me', '/api/v1/agent/tasks/42', '/api/v1/agent/tasks/42']);
+        assert.deepEqual(requestPaths, ['/api/v1/agent/me', '/api/v1/agent/tasks/42', '/api/v1/agent/runtime-sessions', '/api/v1/agent/tasks/42']);
     } finally {
         server.close();
         await once(server, 'close');
@@ -1066,6 +1115,8 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent credential list AGENT_ID/);
     assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
     assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=codex\|claude\|agy/);
+    assert.match(output.value, /Informa a MyCompanies del estado y la fase/);
+    assert.match(output.value, /no envía prompts ni respuestas del modelo/);
     assert.match(output.value, /--include-company-context/);
     assert.match(output.value, /red está deshabilitada por defecto/);
     assert.match(output.value, /red abierta solo para Codex/);

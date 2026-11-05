@@ -269,6 +269,64 @@ test('agent task detail retrieves only the requested task and accepts a company-
     });
 });
 
+test('agent runtime reports session start and status updates with bounded identity data', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const requests = [];
+        const server = createServer(async (request, response) => {
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body: JSON.parse(body) });
+            response.writeHead(request.method === 'POST' ? 201 : 200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                session: {
+                    id: 31,
+                    agent_id: 12,
+                    task_id: 26,
+                    provider: 'codex',
+                    status: request.method === 'POST' ? 'running' : 'succeeded',
+                    phase: request.method === 'POST' ? 'starting' : 'completed',
+                    started_at: '2026-11-05T12:00:00+00:00',
+                    last_reported_at: '2026-11-05T12:00:10+00:00',
+                    finished_at: request.method === 'POST' ? null : '2026-11-05T12:00:10+00:00',
+                },
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const session = await client.startRuntimeSession(26, 'codex', companyRoot);
+            assert.equal(session.id, 31);
+            assert.equal(session.status, 'running');
+            const completed = await client.updateRuntimeSession(31, 'succeeded', 'completed', companyRoot);
+            assert.equal(completed.phase, 'completed');
+            assert.deepEqual(requests.map(({ method, url, authorization, body }) => ({ method, url, authorization, body })), [
+                { method: 'POST', url: '/api/v1/agent/runtime-sessions', authorization: `Bearer ${token}`, body: { task_id: 26, provider: 'codex' } },
+                { method: 'PATCH', url: '/api/v1/agent/runtime-sessions/31', authorization: `Bearer ${token}`, body: { status: 'succeeded', phase: 'completed' } },
+            ]);
+            await assert.rejects(client.startRuntimeSession(0, 'codex', companyRoot), /ID de tarea/);
+            await assert.rejects(client.startRuntimeSession(26, 'other', companyRoot), /proveedor/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent bet list and detail use Agent auth and validate returned evidence', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');

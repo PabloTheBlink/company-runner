@@ -1028,6 +1028,53 @@ export class AgentClient {
         return response.body.task;
     }
 
+    async startRuntimeSession(taskId, provider, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+        if (!['codex', 'claude', 'agy'].includes(provider)) {
+            throw new Error('El proveedor de runtime no es válido.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(
+            `${serverUrl}/api/v1/agent/runtime-sessions`,
+            { task_id: taskId, provider },
+            configuration.api_token,
+        );
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401).');
+        if (response.status === 403) throw new Error('El Agent no tiene acceso de lectura a esta tarea (HTTP 403).');
+        if (response.status === 404) throw new Error('La tarea no está asignada o no está disponible para este Agent.');
+        if (response.status !== 201 || !isAgentRuntimeSession(response.body.session, configuration.agent_id, taskId, provider)) {
+            throw new Error('MyCompanies devolvió una sesión Agent no válida.');
+        }
+        return response.body.session;
+    }
+
+    async updateRuntimeSession(sessionId, status, phase, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(sessionId) || sessionId < 1) {
+            throw new Error('El ID de sesión debe ser un entero positivo.');
+        }
+        if (!['running', 'succeeded', 'failed', 'interrupted'].includes(status)
+            || !['working', 'applying_files', 'publishing', 'completed', 'failed', 'interrupted'].includes(phase)) {
+            throw new Error('El estado de sesión Agent no es válido.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.patchJson(
+            `${serverUrl}/api/v1/agent/runtime-sessions/${sessionId}`,
+            { status, phase },
+            configuration.api_token,
+        );
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401).');
+        if (response.status === 403) throw new Error('El Agent no puede actualizar esta sesión (HTTP 403).');
+        if (response.status === 404) throw new Error('La sesión no está disponible para este Agent.');
+        if (response.status !== 200 || !isAgentRuntimeSession(response.body.session, configuration.agent_id)) {
+            throw new Error('MyCompanies devolvió una actualización de sesión Agent no válida.');
+        }
+        return response.body.session;
+    }
+
     async listOffers(currentDirectory = process.cwd(), afterId = null) {
         if (afterId !== null && (!Number.isSafeInteger(afterId) || afterId < 1)) {
             throw new Error('El cursor de ofertas debe ser un entero positivo.');
@@ -2178,6 +2225,24 @@ function isAgentTask(task, includeDescription = false) {
                 && Number.isInteger(task.workspace.id)
                 && task.workspace.id > 0
                 && typeof task.workspace.name === 'string'));
+}
+
+function isAgentRuntimeSession(session, expectedAgentId, expectedTaskId = null, expectedProvider = null) {
+    return session !== null
+        && typeof session === 'object'
+        && Number.isSafeInteger(session.id)
+        && session.id > 0
+        && session.agent_id === expectedAgentId
+        && Number.isSafeInteger(session.task_id)
+        && session.task_id > 0
+        && (expectedTaskId === null || session.task_id === expectedTaskId)
+        && ['codex', 'claude', 'agy'].includes(session.provider)
+        && (expectedProvider === null || session.provider === expectedProvider)
+        && ['running', 'succeeded', 'failed', 'interrupted'].includes(session.status)
+        && ['starting', 'working', 'applying_files', 'publishing', 'completed', 'failed', 'interrupted'].includes(session.phase)
+        && typeof session.started_at === 'string'
+        && typeof session.last_reported_at === 'string'
+        && (session.finished_at === null || typeof session.finished_at === 'string');
 }
 
 function isAgentOfferSummary(offer) {
