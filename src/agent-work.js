@@ -135,8 +135,12 @@ export async function runAgentWorkOnce({
             }
 
             await heartbeatTaskClaim(candidate.id, claimToken, currentDirectory);
-            const finish = await finishTaskClaim(candidate.id, claimToken, outcome.status, outcome.summary, currentDirectory);
-            return { task, outcome, finish };
+            const recordedSummary = shouldApplyAgentTaskWrites(outcome)
+                ? outcome.summary
+                : `Resultado ${outcome.status}; cambios locales descartados. ${outcome.summary}`.slice(0, 4_000);
+            const finish = await finishTaskClaim(candidate.id, claimToken, outcome.status, recordedSummary, currentDirectory);
+
+            return { task, outcome: { ...outcome, summary: recordedSummary }, finish };
         } finally {
             clearIntervalImplementation(heartbeat);
         }

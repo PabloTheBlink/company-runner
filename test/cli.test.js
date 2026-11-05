@@ -809,7 +809,9 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
             assert.deepEqual(JSON.parse(body), {
                 claim_token: claimToken,
                 status: outcome.status,
-                summary: outcome.summary,
+                summary: outcome.status === 'completed'
+                    ? outcome.summary
+                    : `Resultado ${outcome.status}; cambios locales descartados. ${outcome.summary}`,
             });
             response.end(JSON.stringify({ task: { id: 42, status: outcome.status }, replayed: false }));
             return;

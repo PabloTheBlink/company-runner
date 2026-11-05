@@ -98,6 +98,41 @@ test('worker returns no work when no active task is assigned to this Agent', asy
     assert.equal(claimCount, 0);
 });
 
+test('blocked outcomes record that staged local changes were discarded', async () => {
+    let recordedSummary = null;
+    const result = await runAgentWorkOnce({
+        agentId: 9,
+        provider: 'codex',
+        listTasks: async (_directory, _afterId, status) => ({
+            tasks: status === 'open' ? [{
+                id: 8,
+                title: 'Gather evidence',
+                status: 'open',
+                assignee: { type: 'agent', id: 9, name: 'Vera' },
+            }] : [],
+            has_more: false,
+            next_after: null,
+        }),
+        getTask: async () => ({
+            id: 8,
+            status: 'in_progress',
+            assignee: { type: 'agent', id: 9, name: 'Vera' },
+        }),
+        claimTask: async (taskId, claimToken) => ({ task_id: taskId, claim_token: claimToken }),
+        heartbeatTaskClaim: async () => ({ renewed: true }),
+        finishTaskClaim: async (_taskId, _claimToken, _status, summary) => {
+            recordedSummary = summary;
+            return { task: { id: 8, status: 'blocked' }, replayed: false };
+        },
+        executeTask: async () => ({ status: 'blocked', summary: 'Falta permiso de lectura.' }),
+        createClaimToken: () => 'D'.repeat(80),
+        heartbeatIntervalMs: 60_000,
+    });
+
+    assert.equal(recordedSummary, 'Resultado blocked; cambios locales descartados. Falta permiso de lectura.');
+    assert.equal(result.outcome.summary, recordedSummary);
+});
+
 test('worker validates structured outcomes and aborts execution if the lease heartbeat is lost', async () => {
     await assert.rejects(runAgentWorkOnce({
         agentId: 9,
