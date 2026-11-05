@@ -1,6 +1,12 @@
 import { DEVTO_STATS_TOTALS_CAPABILITY, isDevtoStatsInstalled, runDevtoStatsTotals } from './devto-stats-totals.js';
 import { COMPANY_REPORT_PUBLISH_CAPABILITY, isCompanyReportPublishInstalled, runCompanyReportPublish } from './company-report-publish.js';
 import { createCapabilityRegistry } from './registry.js';
+import {
+    isMicroappsTelemetryInstalled,
+    isValidMicroappsTelemetryResult,
+    MICROAPPS_TELEMETRY_CAPABILITY,
+    runMicroappsTelemetry,
+} from './microapps-telemetry.js';
 
 export const localCapabilityRegistry = createCapabilityRegistry([{
     ...DEVTO_STATS_TOTALS_CAPABILITY,
@@ -12,6 +18,15 @@ export const localCapabilityRegistry = createCapabilityRegistry([{
     validateParameters: (parameters) => Array.isArray(parameters) && parameters.length === 0,
     validateResult: isValidDevtoResult,
     summarize: (result) => ({ outcome: 'succeeded', article_count: result.articles.length }),
+}, {
+    ...MICROAPPS_TELEMETRY_CAPABILITY,
+    access: 'solo lectura',
+    requirement: 'Python 3 y proyecto Microapps configurado en la carpeta de empresa',
+    isInstalled: isMicroappsTelemetryInstalled,
+    run: runMicroappsTelemetry,
+    validateParameters: MICROAPPS_TELEMETRY_CAPABILITY.agentTool.validateParameters,
+    validateResult: isValidMicroappsTelemetryResult,
+    summarize: MICROAPPS_TELEMETRY_CAPABILITY.agentTool.summarize,
 }, {
     ...COMPANY_REPORT_PUBLISH_CAPABILITY,
     access: 'publicar informe',
