@@ -10,6 +10,7 @@ import { AgentClient, formatAssignee, RunnerClient } from './client.js';
 import { listLocalCapabilities } from './capabilities/devto-stats-totals.js';
 import { initializeCompanyRoot } from './company-kit.js';
 import { applyLocalAgentFileWrites, stageLocalAgentFiles } from './local-agent-files.js';
+import { syncAgentProfileInstructions } from './agent-profile-sync.js';
 import { runAgentRuntime } from './agent-runtime.js';
 import { createAgentRuntimePlan, listLocalAgentRuntimes, normalizeLocalAgentPath } from './runtime.js';
 
@@ -35,6 +36,23 @@ export async function run(
         const result = await initializeCompanyRoot(currentDirectory);
         streams.stdout.write(`Carpeta de empresa preparada · ${result.created.length} archivos creados · ${result.updated.length} archivos actualizados · ${result.unchanged.length} sin cambios.\n`);
         return 0;
+    }
+
+    if (command === 'sync') {
+        if (argumentsAfterCommand.length !== 0) throw new Error('sync no admite opciones.');
+        const agentClient = new AgentClient(configStore);
+        const profile = await agentClient.getOwnProfile(currentDirectory);
+        const agentConfiguration = await configStore.loadAgentForDirectory(currentDirectory);
+        const result = await syncAgentProfileInstructions(agentConfiguration.company_root_path, profile);
+        const messages = {
+            created: 'Instrucciones del agente creadas localmente',
+            updated: 'Instrucciones del agente actualizadas desde MyCompanies',
+            unchanged: 'Instrucciones del agente ya están sincronizadas',
+            adopted: 'Instrucciones locales coinciden con el perfil de MyCompanies',
+            conflict: 'Conflicto: las instrucciones locales cambiaron; se conservaron sin modificaciones',
+        };
+        streams.stdout.write(`${messages[result.status]} · ${result.path}\n`);
+        return result.status === 'conflict' ? 2 : 0;
     }
 
     if (command === 'capabilities') {
@@ -1038,7 +1056,7 @@ function createAgentRuntimePrompt(identity, task, allowNetwork = false, memory =
         'Solo puedes leer archivos presentes en el directorio temporal y autorizados para read.',
         fileWriteRule,
         'No crees ni alteres otras rutas. El CLI copiará a la empresa únicamente los cambios en rutas autorizadas para write.',
-        `Si existe agents/${identity.agent.id}/instructions.md o una skill dentro de agents/${identity.agent.id}/skills/, léela solo si está presente en el staging y tiene permiso read.`,
+        `Si existe agents/${identity.agent.uuid}/instructions.md o una skill dentro de agents/${identity.agent.uuid}/skills/, léela solo si está presente en el staging y tiene permiso read.`,
         'No ejecutes comandos ni scripts. Trabaja solo dentro del staging y no intentes acceder a rutas externas.',
         allowNetwork
             ? 'El usuario autorizó acceso de red abierto para esta ejecución Codex. Consulta solo fuentes públicas pertinentes; no envíes contenido local, secretos ni credenciales a servicios externos.'
@@ -1696,6 +1714,9 @@ function printHelp(stdout) {
     stdout.write('    Prepara AGENTS.md, CLAUDE.md y las carpetas agents/, architecture/, tasks/, automations/, reports/ y .mycompanies/.\n');
     stdout.write('    Actualiza solo los bloques que administra MyCompanies; conserva el resto del texto y los archivos existentes. No borra archivos.\n');
     stdout.write('    Solo trabaja en esta carpeta: no conecta con el servidor, no crea Workspaces remotos y no ejecuta automatizaciones.\n');
+    stdout.write('  mycompany sync\n');
+    stdout.write('    Sincroniza solo las instrucciones del agente autenticado en agents/<uuid>/instructions.md; respeta cambios locales y reporta conflictos.\n');
+    stdout.write('    No sincroniza otros agentes, skills, configuración, secretos ni archivos generales de empresa.\n');
     stdout.write('  mycompany enroll --server=URL [--allow-insecure-localhost]\n');
     stdout.write('    Vincula esta carpeta raíz a un Runner de una empresa usando un código de alta de un solo uso, que se pide oculto en el terminal.\n');
     stdout.write('    Guarda la credencial en la configuración privada del usuario, asociada a esta ruta; no copia credenciales locales al servidor.\n');
@@ -1814,7 +1835,7 @@ function printHelp(stdout) {
     stdout.write('    Edita solo datos descriptivos con tasks.manage y deja el historial en MyCompanies. Usa --description= vacío o --due-date=none para borrarlos.\n');
     stdout.write('  mycompany agent forget\n');
     stdout.write('    Elimina la credencial Agent local de esta carpeta. No la revoca en MyCompanies.\n');
-    stdout.write('\nAlcance actual: no hay sincronización automática ni comando sync. init solo gestiona archivos locales; heartbeat, work y tasks consultan la API.\n');
+    stdout.write('\nLa sincronización es manual: ejecuta mycompany sync cuando quieras actualizar las instrucciones del agente autenticado.\n');
     stdout.write('Los Workspaces son ámbitos lógicos del servidor. La raíz local de empresa puede contener varios proyectos y automatizaciones.\n');
 }
 

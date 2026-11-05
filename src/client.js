@@ -458,6 +458,32 @@ export class AgentClient {
         return identity;
     }
 
+    async getOwnProfile(currentDirectory = process.cwd()) {
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/profile`, configuration.api_token);
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        const agent = response.body.agent;
+        if (response.status !== 200
+            || agent === null || typeof agent !== 'object'
+            || !Number.isSafeInteger(agent.id) || agent.id < 1
+            || typeof agent.uuid !== 'string'
+            || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(agent.uuid)
+            || typeof agent.name !== 'string'
+            || !(agent.role === null || typeof agent.role === 'string')
+            || !(agent.instructions === null || typeof agent.instructions === 'string')
+            || Buffer.byteLength(agent.instructions ?? '', 'utf8') > 10_000) {
+            throw new Error('MyCompanies devolvió un perfil Agent no válido.');
+        }
+        if (agent.id !== configuration.agent_id) {
+            throw new Error('La identidad Agent del servidor no coincide con la configuración local.');
+        }
+
+        return agent;
+    }
+
     async getCompanyContext(identity, currentDirectory = process.cwd()) {
         const definitions = [
             { name: 'tasks', permissions: ['tasks.read', 'tasks.manage'], collection: 'tasks', load: () => this.listTasks(currentDirectory), map: mapTaskContext },

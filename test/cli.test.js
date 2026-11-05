@@ -1027,6 +1027,8 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.equal(await run(['help'], { stdout: output }), 0);
     assert.match(output.value, /mycompany heartbeat/);
     assert.match(output.value, /mycompany init/);
+    assert.match(output.value, /mycompany sync/);
+    assert.match(output.value, /respeta cambios locales y reporta conflictos/);
     assert.match(output.value, /mycompany work/);
     assert.match(output.value, /mycompany execute/);
     assert.match(output.value, /mycompany capabilities/);
@@ -1084,7 +1086,7 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent task create/);
     assert.match(output.value, /mycompany agent task assign ID/);
     assert.match(output.value, /mycompany agent task edit ID/);
-    assert.match(output.value, /no hay sincronización automática/);
+    assert.match(output.value, /La sincronización es manual/);
     assert.match(output.value, /no se crea una carpeta por Workspace/);
     assert.match(output.value, /no conecta con el servidor/);
     assert.match(output.value, /No reclama, modifica, marca como terminadas ni ejecuta/);
@@ -1129,6 +1131,65 @@ test('capabilities reports locally installed adapters without contacting MyCompa
         assert.match(output.value, /No hay adaptadores locales disponibles/);
     } finally {
         await rm(companyRoot, { recursive: true, force: true });
+    }
+});
+
+test('sync downloads only the authenticated Agent instructions and keeps local conflicts', async () => {
+    const directory = await mkdtemp(path.join(process.cwd(), '.mycompany-sync-cli-test-'));
+    const companyRoot = path.join(directory, 'company');
+    const configStore = new ConfigStore(path.join(directory, 'config', 'mycompanies', 'runner.json'));
+    const token = 'A'.repeat(80);
+    const profile = {
+        agent: {
+            id: 12,
+            uuid: 'c376a06b-8b47-4b50-9438-3a522af9f1fa',
+            name: 'Vera',
+            role: 'CEO',
+            instructions: '# Instrucciones de Vera\n',
+        },
+    };
+    const nestedProject = path.join(companyRoot, 'proyectos', 'web');
+    await mkdir(nestedProject, { recursive: true });
+    const server = createServer((request, response) => {
+        assert.equal(request.method, 'GET');
+        assert.equal(request.url, '/api/v1/agent/profile');
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(profile));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const serverUrl = `http://127.0.0.1:${server.address().port}`;
+    await configStore.saveAgent({
+        server_url: serverUrl,
+        agent_id: 12,
+        agent_name: 'Vera',
+        company_id: 4,
+        company_name: 'Empresa de prueba',
+        company_root_path: companyRoot,
+        allow_insecure_localhost: true,
+        api_token: token,
+    });
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+
+    try {
+        assert.equal(await run(['sync'], { stdout }, nestedProject, configStore), 0);
+        assert.match(stdout.value, /creadas localmente/);
+        assert.equal(await readFile(path.join(companyRoot, 'agents', profile.agent.uuid, 'instructions.md'), 'utf8'), profile.agent.instructions);
+        stdout.value = '';
+        assert.equal(await run(['sync'], { stdout }, nestedProject, configStore), 0);
+        assert.match(stdout.value, /ya están sincronizadas/);
+        await writeFile(path.join(companyRoot, 'agents', profile.agent.uuid, 'instructions.md'), '# Cambio local\n');
+        profile.agent.instructions = '# Cambio en servidor\n';
+        stdout.value = '';
+        assert.equal(await run(['sync'], { stdout }, nestedProject, configStore), 2);
+        assert.match(stdout.value, /Conflicto/);
+        assert.equal(await readFile(path.join(companyRoot, 'agents', profile.agent.uuid, 'instructions.md'), 'utf8'), '# Cambio local\n');
+        await assert.rejects(run(['sync', '--force'], { stdout }, companyRoot, configStore), /no admite opciones/);
+    } finally {
+        server.close();
+        await once(server, 'close');
+        await rm(directory, { recursive: true, force: true });
     }
 });
 

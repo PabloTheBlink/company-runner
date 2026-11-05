@@ -124,6 +124,54 @@ test('agent login verifies identity before storing its credential separately fro
     });
 });
 
+test('agent profile sync reads only its authenticated profile and validates identity and instructions', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const profile = {
+            agent: {
+                id: 12,
+                uuid: 'c376a06b-8b47-4b50-9438-3a522af9f1fa',
+                name: 'Vera',
+                role: 'CEO',
+                instructions: '# Instrucciones de Vera\n',
+            },
+        };
+        const server = createServer((request, response) => {
+            assert.equal(request.url, '/api/v1/agent/profile');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify(profile));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const received = await new AgentClient(configStore).getOwnProfile(companyRoot);
+            assert.deepEqual(received, profile.agent);
+            profile.agent.uuid = 'uuid-inválido';
+            await assert.rejects(new AgentClient(configStore).getOwnProfile(companyRoot), /no válido/);
+            profile.agent.uuid = 'c376a06b-8b47-4b50-9438-3a522af9f1fa';
+            profile.agent.instructions = 'x'.repeat(10001);
+            await assert.rejects(new AgentClient(configStore).getOwnProfile(companyRoot), /no válido/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent task listing uses the Agent credential, status filter and cursor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
