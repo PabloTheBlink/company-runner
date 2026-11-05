@@ -11,6 +11,10 @@ test('capability registry lists only adapters installed in the selected company 
             requirement: 'Example tool',
             isInstalled: async (root) => root === '/company-a',
             run: async () => ({ value: 1 }),
+            maxRuntimeMs: 1000,
+            validateParameters: () => true,
+            validateResult: () => true,
+            summarize: () => ({}),
         },
         {
             name: 'example.write',
@@ -19,6 +23,10 @@ test('capability registry lists only adapters installed in the selected company 
             requirement: 'Example tool',
             isInstalled: async () => false,
             run: async () => ({ value: 2 }),
+            maxRuntimeMs: 1000,
+            validateParameters: () => true,
+            validateResult: () => true,
+            summarize: () => ({}),
         },
     ]);
 
@@ -40,6 +48,10 @@ test('capability registry rejects duplicate identities and incomplete adapters',
         requirement: 'Example tool',
         isInstalled: async () => true,
         run: async () => ({}),
+        maxRuntimeMs: 1000,
+        validateParameters: () => true,
+        validateResult: () => true,
+        summarize: () => ({}),
     };
 
     assert.throws(() => createCapabilityRegistry([adapter, adapter]), /identidad duplicada/);

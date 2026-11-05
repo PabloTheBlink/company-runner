@@ -1747,6 +1747,80 @@ test('manual execution claims, starts, runs only the fixed adapter, and submits 
     });
 });
 
+test('manual execution can publish only the report path and title approved by the server', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(path.join(companyRoot, 'reports'), { recursive: true });
+        await writeFile(path.join(companyRoot, 'reports', 'market-review.md'), '# Market\n\nFindings.');
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'T'.repeat(80);
+        const calls = [];
+        const server = createServer(async (request, response) => {
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            const parsedBody = body === '' ? null : JSON.parse(body);
+            calls.push({ url: request.url, body: parsedBody });
+
+            if (request.url.endsWith('/claim')) {
+                assert.deepEqual(parsedBody.capabilities, [{ name: 'company.report.publish', version: '1.0.0' }]);
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({
+                    id: 44,
+                    capability: 'company.report.publish',
+                    capability_version: '1.0.0',
+                    parameters: { path: 'reports/market-review.md', title: 'Market review' },
+                    lease_token: 'L'.repeat(80),
+                }));
+                return;
+            }
+            if (request.url.endsWith('/start')) {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ status: 'running', runtime_deadline_at: new Date(Date.now() + 30_000).toISOString() }));
+                return;
+            }
+            if (request.url.endsWith('/result')) {
+                assert.deepEqual(parsedBody.result, {
+                    title: 'Market review',
+                    original_filename: 'market-review.md',
+                    content: '# Market\n\nFindings.',
+                });
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ status: 'succeeded', result_hash: 'a'.repeat(64), replayed: false }));
+                return;
+            }
+
+            response.writeHead(404);
+            response.end();
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveNew({
+            server_url: serverUrl,
+            runner_id: 7,
+            workspace_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new RunnerClient(configStore);
+            assert.deepEqual(await client.executeOnce(companyRoot), {
+                outcome: 'succeeded',
+                title: 'Market review',
+                filename: 'market-review.md',
+            });
+            assert.deepEqual(calls.map(({ url }) => url), [
+                '/api/v1/runner/executions/claim',
+                '/api/v1/runner/executions/44/start',
+                '/api/v1/runner/executions/44/result',
+            ]);
+            assert.equal(JSON.stringify(calls).includes(companyRoot), false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('manual execution never runs the adapter before a successful start and returns no work cleanly', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
@@ -1890,7 +1964,7 @@ test('manual execution does not claim work when the exact local capability is un
             listLocalCapabilitiesImplementation: async () => [],
         });
 
-        await assert.rejects(client.executeOnce(companyRoot), /no está instalada/);
+        await assert.rejects(client.executeOnce(companyRoot), /No hay capacidades locales/);
         assert.equal(networkCalls, 0);
     });
 });

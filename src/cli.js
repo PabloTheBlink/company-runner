@@ -64,7 +64,7 @@ export async function run(
         } else {
             streams.stdout.write('Capacidades locales disponibles:\n');
             for (const capability of capabilities) {
-                streams.stdout.write(`${capability.name}@${capability.version} · solo lectura · requiere ${capability.requirement}\n`);
+                streams.stdout.write(`${capability.name}@${capability.version} · ${capability.access} · requiere ${capability.requirement}\n`);
             }
         }
         streams.stdout.write('No conecta con MyCompanies, no inspecciona archivos de secretos, no muestra credenciales ni ejecuta adaptadores.\n');
@@ -1753,8 +1753,8 @@ function printHelp(stdout) {
     stdout.write('    Consulta si hay una comprobación autorizada de capacidad fija, comprueba acceso de lectura a la carpeta y devuelve solo ese resultado.\n');
     stdout.write('    No ejecuta código o comandos enviados por el servidor ni transmite la ruta local.\n');
     stdout.write('  mycompany execute\n');
-    stdout.write('    Reclama una autorización manual y ejecuta la capacidad fija incluida en esta versión después de que MyCompanies confirme /start.\n');
-    stdout.write('    Devuelve solo el resultado validado por esa capacidad; no ejecuta código recibido, no hace polling ni programa tareas.\n');
+    stdout.write('    Reclama una autorización manual y ejecuta solo la capacidad local exacta permitida por MyCompanies tras confirmar /start.\n');
+    stdout.write('    Devuelve solo el informe o resultado autorizado; no ejecuta código recibido, no hace polling ni programa tareas.\n');
     stdout.write('  mycompany capabilities\n');
     stdout.write('    Comprueba localmente qué adaptadores están instalados en la carpeta de empresa. No ejecuta los adaptadores.\n');
     stdout.write('    No conecta con MyCompanies, no inspecciona archivos de secretos ni muestra credenciales.\n');

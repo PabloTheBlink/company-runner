@@ -1104,7 +1104,9 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(capabilitiesHelp, /localmente/);
     assert.match(capabilitiesHelp, /No conecta con MyCompanies, no inspecciona archivos de secretos/);
     const executeHelp = output.value.split('mycompany execute')[1].split('mycompany tasks')[0];
-    assert.match(executeHelp, /después de que MyCompanies confirme \/start/);
+    assert.match(executeHelp, /tras confirmar \/start/);
+    assert.match(executeHelp, /capacidad local exacta permitida por MyCompanies/);
+    assert.match(executeHelp, /solo el informe o resultado autorizado/);
     assert.match(executeHelp, /no hace polling/);
     assert.doesNotMatch(output.value, /Dev\.to|Apify|Devetty/);
     assert.match(output.value, /mycompany tasks/);
@@ -1176,7 +1178,9 @@ test('capabilities reports locally installed adapters without contacting MyCompa
     const companyRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-capabilities-test-'));
     const nestedDirectory = path.join(companyRoot, 'automations', 'devto');
     const scriptPath = path.join(nestedDirectory, 'devto_stats.py');
+    const reportsDirectory = path.join(companyRoot, 'reports');
     await mkdir(nestedDirectory, { recursive: true });
+    await mkdir(reportsDirectory);
     await writeFile(scriptPath, '# fixture; never executed\n');
     const output = { value: '', write(chunk) { this.value += chunk; } };
     const requestedDirectories = [];
@@ -1190,11 +1194,14 @@ test('capabilities reports locally installed adapters without contacting MyCompa
     try {
         assert.equal(await run(['capabilities'], { stdout: output, stderr: output }, companyRoot, configStore), 0);
         assert.match(output.value, /devto\.stats\.totals@1\.0\.0/);
+        assert.match(output.value, /company\.report\.publish@1\.0\.0/);
         assert.match(output.value, /solo lectura/);
+        assert.match(output.value, /publicar informe/);
         assert.match(output.value, /No conecta con MyCompanies, no inspecciona archivos de secretos, no muestra credenciales ni ejecuta adaptadores/);
         assert.deepEqual(requestedDirectories, [companyRoot]);
 
         await rm(scriptPath);
+        await rm(reportsDirectory, { recursive: true });
         output.value = '';
         assert.equal(await run(['capabilities'], { stdout: output, stderr: output }, companyRoot, configStore), 0);
         assert.match(output.value, /No hay adaptadores locales disponibles/);

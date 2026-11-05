@@ -1,7 +1,7 @@
 import { lstat, open, realpath, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve, sep } from 'node:path';
 import { DEVTO_STATS_TOTALS_CAPABILITY, runDevtoStatsTotals } from './capabilities/devto-stats-totals.js';
-import { listLocalCapabilities } from './capabilities/index.js';
+import { listLocalCapabilities, localCapabilityRegistry } from './capabilities/index.js';
 const API_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const ENROLLMENT_CODE_PATTERN = /^[A-Za-z0-9]{64}$/;
 const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
@@ -58,11 +58,13 @@ export class RunnerClient {
     constructor(configStore, fetchImplementation = globalThis.fetch, {
         listLocalCapabilitiesImplementation = listLocalCapabilities,
         runDevtoStatsTotalsImplementation = runDevtoStatsTotals,
+        capabilityRegistry = localCapabilityRegistry,
     } = {}) {
         this.configStore = configStore;
         this.fetch = fetchImplementation;
         this.listLocalCapabilities = listLocalCapabilitiesImplementation;
         this.runDevtoStatsTotals = runDevtoStatsTotalsImplementation;
+        this.capabilityRegistry = capabilityRegistry;
     }
 
     async enroll(serverUrl, code, companyRootPath = process.cwd(), allowInsecureLocalhost = false) {
@@ -187,15 +189,13 @@ export class RunnerClient {
         const configuration = await this.configStore.loadForDirectory(currentDirectory);
         const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
         const localCapabilities = await this.listLocalCapabilities(configuration.workspace_path);
-        const hasDevtoCapability = localCapabilities.some((capability) => capability.name === DEVTO_STATS_TOTALS_CAPABILITY.name
-            && capability.version === DEVTO_STATS_TOTALS_CAPABILITY.version);
-        if (!hasDevtoCapability) {
-            throw new Error('La capacidad devto.stats.totals@1.0.0 no está instalada en esta carpeta de empresa.');
+        if (localCapabilities.length === 0) {
+            throw new Error('No hay capacidades locales instaladas en esta carpeta de empresa.');
         }
 
         const claim = await this.postJson(
             `${serverUrl}/api/v1/runner/executions/claim`,
-            { capabilities: [{ name: DEVTO_STATS_TOTALS_CAPABILITY.name, version: DEVTO_STATS_TOTALS_CAPABILITY.version }] },
+            { capabilities: localCapabilities.map(({ name, version }) => ({ name, version })) },
             configuration.api_token,
         );
         if (claim.status === 204) return null;
@@ -205,13 +205,18 @@ export class RunnerClient {
         if (claim.status !== 200
             || !Number.isSafeInteger(claim.body.id)
             || claim.body.id < 1
-            || claim.body.capability !== DEVTO_STATS_TOTALS_CAPABILITY.name
-            || claim.body.capability_version !== DEVTO_STATS_TOTALS_CAPABILITY.version
-            || !Array.isArray(claim.body.parameters)
-            || claim.body.parameters.length !== 0
+            || typeof claim.body.capability !== 'string'
+            || typeof claim.body.capability_version !== 'string'
+            || !localCapabilities.some((capability) => capability.name === claim.body.capability
+                && capability.version === claim.body.capability_version)
             || typeof claim.body.lease_token !== 'string'
             || !API_TOKEN_PATTERN.test(claim.body.lease_token)) {
             throw new Error('MyCompanies devolvió una autorización de ejecución no válida.');
+        }
+
+        const capability = this.capabilityRegistry.get(claim.body.capability, claim.body.capability_version);
+        if (capability === null || !capability.validateParameters(claim.body.parameters)) {
+            throw new Error('MyCompanies devolvió parámetros no válidos para la capacidad autorizada.');
         }
 
         const executionPath = `${serverUrl}/api/v1/runner/executions/${claim.body.id}`;
@@ -229,7 +234,7 @@ export class RunnerClient {
         }
 
         const timeoutMs = Math.min(
-            DEVTO_STATS_TOTALS_CAPABILITY.maxRuntimeMs,
+            capability.maxRuntimeMs,
             runtimeDeadline - Date.now() - 1_000,
         );
         if (timeoutMs <= 0) {
@@ -240,16 +245,19 @@ export class RunnerClient {
         let outcome = 'succeeded';
         let resultPayload;
         try {
-            localResult = await this.runDevtoStatsTotals({
-                companyRoot: configuration.workspace_path,
-                timeoutMs,
-            });
+            localResult = capability.name === DEVTO_STATS_TOTALS_CAPABILITY.name
+                ? await this.runDevtoStatsTotals({ companyRoot: configuration.workspace_path, timeoutMs })
+                : await capability.run({
+                    companyRoot: configuration.workspace_path,
+                    parameters: claim.body.parameters,
+                    timeoutMs,
+                });
             const successPayload = {
                 lease_token: claim.body.lease_token,
                 outcome: 'succeeded',
                 result: localResult,
             };
-            if (!isValidDevtoStatsResult(localResult)
+            if (!capability.validateResult(localResult)
                 || Buffer.byteLength(JSON.stringify(successPayload), 'utf8') > MAX_EXECUTION_RESULT_BYTES) {
                 outcome = 'failed';
                 resultPayload = { failure_code: 'invalid_local_result' };
@@ -278,10 +286,13 @@ export class RunnerClient {
             throw new Error('MyCompanies no aceptó el resultado; el intento puede requerir revisión.');
         }
 
-        return {
-            outcome,
-            article_count: outcome === 'succeeded' ? localResult.articles.length : 0,
-        };
+        if (outcome === 'succeeded') {
+            return capability.summarize(localResult);
+        }
+
+        return capability.name === DEVTO_STATS_TOTALS_CAPABILITY.name
+            ? { outcome: 'failed', article_count: 0 }
+            : { outcome: 'failed' };
     }
 
     async listTasks(currentDirectory = process.cwd(), afterId = null, status = null) {
@@ -2548,31 +2559,6 @@ function isCreatedAgentTask(task) {
                 && Number.isInteger(task.workspace.id)
                 && task.workspace.id > 0
                 && typeof task.workspace.name === 'string'));
-}
-
-function isValidDevtoStatsResult(result) {
-    return result !== null
-        && typeof result === 'object'
-        && !Array.isArray(result)
-        && Object.keys(result).sort().join(',') === 'articles,scope,source'
-        && result.source === 'Dev.to analytics'
-        && result.scope === 'lifetime totals'
-        && Array.isArray(result.articles)
-        && result.articles.length <= 500
-        && result.articles.every((article) => article !== null
-            && typeof article === 'object'
-            && !Array.isArray(article)
-            && Object.keys(article).sort().join(',') === 'id,metrics'
-            && Number.isSafeInteger(article.id)
-            && article.id > 0
-            && article.metrics !== null
-            && typeof article.metrics === 'object'
-            && !Array.isArray(article.metrics)
-            && Object.keys(article.metrics).length <= 50
-            && Object.entries(article.metrics).every(([name, value]) => /^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(name)
-                && typeof value === 'number'
-                && Number.isFinite(value)
-                && value >= 0));
 }
 
 async function readResponseLimited(response, maximumBytes) {

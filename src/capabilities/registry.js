@@ -17,7 +17,12 @@ export function createCapabilityRegistry(adapters) {
             || typeof adapter.access !== 'string'
             || typeof adapter.requirement !== 'string'
             || typeof adapter.isInstalled !== 'function'
-            || typeof adapter.run !== 'function') {
+            || typeof adapter.run !== 'function'
+            || !Number.isInteger(adapter.maxRuntimeMs)
+            || adapter.maxRuntimeMs < 1
+            || typeof adapter.validateParameters !== 'function'
+            || typeof adapter.validateResult !== 'function'
+            || typeof adapter.summarize !== 'function') {
             throw new Error('El adaptador de capacidad no es válido.');
         }
 
