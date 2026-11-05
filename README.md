@@ -223,6 +223,8 @@ The default mode asks the selected provider for a strict JSON plan of up to thre
 
 The parent task detail returns the current child IDs, titles, statuses, and assignees. The server refuses parent completion while any child is not completed and refuses to reopen a child after its parent is complete. These checks protect web, Agent API, and lease-based completion. Child work still needs an explicit `delegate` or `work --once` invocation; no automatic chain or background worker exists yet.
 
+A controlled local Codex run verified the sequence parent → direct-report child → child completion → parent completion, with three successful runtime sessions and network/file access disabled. The parent saw the child's status before closing. This verifies manual coordination and task-state safeguards, not unattended scheduling.
+
 An end-to-end local pilot exercised a CEO → manager → specialist hierarchy with real Codex runs and the MyCompanies API. It verified nested task creation, workspace-scoped assignment, runtime sessions, completion, and private artifact publication. The pilot proves scoped hierarchical task creation and assignment; it does not prove automatic task pickup or a continuously running agent workforce. A scheduler/worker cycle, concurrency-safe task claiming, completion policy, and failure recovery remain future work.
 
 ## Credential storage
