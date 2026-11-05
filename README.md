@@ -8,7 +8,7 @@
 - Runtime dependencies: none
 - License: MIT
 
-The CLI talks to MyCompanies through its HTTP API and has no direct database connection. Server database migrations and MariaDB compatibility are maintained in the Laravel repository; this validation does not change the Runner protocol or local Runner configuration. The server's opt-in MariaDB HTTP checks cover the Runners page, heartbeat, a complete authorized workspace-check cycle (web authorization, claim, and result), Agent task-list and task-detail tenant isolation, and idempotent Agent task creation. Exact database/socket guards and transaction rollback are documented in the main repository's `docs/continuidad.md`; run them with `phpunit.mariadb.xml`.
+The CLI talks to MyCompanies through its HTTP API and has no direct database connection. Server database migrations and MariaDB compatibility are maintained in the Laravel repository; this validation does not change the Runner protocol or local Runner configuration. The server's opt-in MariaDB HTTP checks cover the Runners page, heartbeat, a complete authorized workspace-check cycle (web authorization, claim, and result), Agent task-list and task-detail tenant isolation, and idempotent Agent task creation. Exact database/socket guards and transaction rollback are documented in the main repository's `docs/continuidad.md`; run them with `phpunit.mariadb.xml`. PHP test temporary-directory configuration belongs to the Laravel server; Runner's Node test workflow stays independent.
 
 ## Install
 
