@@ -1835,6 +1835,43 @@ export class AgentClient {
         return response.body.evidence;
     }
 
+    async createBet(betData, idempotencyKey, currentDirectory = process.cwd()) {
+        if (!isAgentBetProposalInput(betData)
+            || typeof idempotencyKey !== 'string'
+            || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
+            throw new Error('La propuesta requiere título e hipótesis válidos y una clave UUID.');
+        }
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(
+            `${serverUrl}/api/v1/agent/bets`,
+            betData,
+            configuration.api_token,
+            idempotencyKey,
+        );
+        if (response.status === 401) {
+            throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        }
+        if (response.status === 403) {
+            throw new Error('El agente necesita bets.manage para proponer una apuesta (HTTP 403).');
+        }
+        if (response.status === 409) {
+            throw new Error('La clave UUID ya se usó con datos distintos. Usa otra clave para crear una propuesta nueva.');
+        }
+        if (response.status === 422) {
+            throw new Error('MyCompanies rechazó la propuesta. Revisa el título, la hipótesis y la descripción (HTTP 422).');
+        }
+        if (response.status === 429) {
+            throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        }
+        if (![200, 201].includes(response.status)
+            || !isCreatedAgentBet(response.body.bet)
+            || typeof response.body.replayed !== 'boolean') {
+            throw new Error('MyCompanies devolvió una respuesta de propuesta Agent no válida.');
+        }
+        return response.body;
+    }
+
     async updateBetStatus(betId, status, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(betId) || betId < 1) {
             throw new Error('El ID de apuesta debe ser un entero positivo.');
@@ -2647,6 +2684,33 @@ function isBetEvidenceInput(evidence) {
     } catch {
         return false;
     }
+}
+
+function isAgentBetProposalInput(bet) {
+    return bet !== null
+        && typeof bet === 'object'
+        && !Array.isArray(bet)
+        && typeof bet.title === 'string'
+        && bet.title.trim() !== ''
+        && bet.title.length <= 160
+        && typeof bet.hypothesis === 'string'
+        && bet.hypothesis.trim() !== ''
+        && bet.hypothesis.length <= 4000
+        && (bet.description === undefined || bet.description === null
+            || (typeof bet.description === 'string' && bet.description.length <= 4000))
+        && Object.keys(bet).every((key) => ['title', 'hypothesis', 'description'].includes(key));
+}
+
+function isCreatedAgentBet(bet) {
+    return isAgentBetSummary(bet)
+        && bet.status === 'proposed'
+        && typeof bet.hypothesis === 'string'
+        && (bet.description === null || typeof bet.description === 'string')
+        && bet.created_by !== null
+        && typeof bet.created_by === 'object'
+        && bet.created_by.type === 'agent'
+        && Number.isInteger(bet.created_by.id)
+        && typeof bet.created_by.name === 'string';
 }
 
 function isRecordedAgentEvidence(evidence) {

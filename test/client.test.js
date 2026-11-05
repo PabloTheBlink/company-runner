@@ -1288,6 +1288,66 @@ test('agent can post evidence to its bet endpoint and receives the recorded acto
     });
 });
 
+test('agent can create a proposed bet with an idempotency UUID', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const idempotencyKey = '94030b4e-0580-42f6-96d6-cb2b2fe7b457';
+        const server = createServer(async (request, response) => {
+            assert.equal(request.method, 'POST');
+            assert.equal(request.url, '/api/v1/agent/bets');
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            assert.equal(request.headers['idempotency-key'], idempotencyKey);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            assert.deepEqual(JSON.parse(body), {
+                title: 'Herramienta de seguimiento',
+                hypothesis: 'Equipos pequeños pagarán por alertas claras.',
+                description: 'Validar con entrevistas.',
+            });
+            response.writeHead(201, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({
+                bet: {
+                    id: 51,
+                    title: 'Herramienta de seguimiento',
+                    hypothesis: 'Equipos pequeños pagarán por alertas claras.',
+                    description: 'Validar con entrevistas.',
+                    status: 'proposed',
+                    created_by: { type: 'agent', id: 12, name: 'Radar' },
+                },
+                replayed: false,
+            }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Radar',
+            company_id: 4,
+            company_name: 'Devetty',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const result = await new AgentClient(configStore).createBet({
+                title: 'Herramienta de seguimiento',
+                hypothesis: 'Equipos pequeños pagarán por alertas claras.',
+                description: 'Validar con entrevistas.',
+            }, idempotencyKey, companyRoot);
+            assert.equal(result.bet.status, 'proposed');
+            assert.equal(result.bet.created_by.name, 'Radar');
+            assert.equal(result.replayed, false);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent bet status update uses the separate endpoint and validates the recorded actor', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');

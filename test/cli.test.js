@@ -6,10 +6,11 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentDelegationOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, parseAgentWorkOptions, parseAgentWorkerOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetProposeOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentDelegationOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, parseAgentWorkOptions, parseAgentWorkerOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 import { listLocalAgentRuntimes } from '../src/runtime.js';
+
 
 test('task assignee labels distinguish people and agents and sanitize terminal controls', () => {
     assert.equal(formatAssignee(null), 'sin asignar');
@@ -1696,6 +1697,27 @@ test('agent bet evidence command requires valid evidence fields and an HTTP sour
     assert.throws(() => parseAgentBetEvidenceOptions([
         '25', '--title=Fuente', '--details=Observación', '--assessment=neutral', '--source-url=javascript:alert(1)',
     ]), /HTTP o HTTPS/);
+});
+
+test('agent bet proposal requires an idempotency UUID and never accepts a status', () => {
+    assert.deepEqual(parseAgentBetProposeOptions([
+        '--title=Herramienta de seguimiento',
+        '--hypothesis=Equipos pequeños pagarán por alertas claras.',
+        '--description=Validar con entrevistas y búsquedas.',
+        '--idempotency-key=94030b4e-0580-42f6-96d6-cb2b2fe7b457',
+    ]), {
+        title: 'Herramienta de seguimiento',
+        hypothesis: 'Equipos pequeños pagarán por alertas claras.',
+        description: 'Validar con entrevistas y búsquedas.',
+        idempotencyKey: '94030b4e-0580-42f6-96d6-cb2b2fe7b457',
+    });
+    assert.throws(() => parseAgentBetProposeOptions([
+        '--title=Idea', '--hypothesis=Una hipótesis', '--idempotency-key=invalid',
+    ]), /UUID/);
+    assert.throws(() => parseAgentBetProposeOptions([
+        '--title=Idea', '--hypothesis=Una hipótesis', '--status=validated',
+        '--idempotency-key=94030b4e-0580-42f6-96d6-cb2b2fe7b457',
+    ]), /desconocida/);
 });
 
 test('agent bet status command accepts only transitions outside automatic conversion', () => {

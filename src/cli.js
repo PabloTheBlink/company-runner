@@ -1081,6 +1081,18 @@ export async function run(
             streams.stdout.write(`Evidencia #${evidence.id} registrada en la apuesta #${options.betId} [${assessment}] por ${safeTerminalText(evidence.recorded_by.name)}.\n`);
             return 0;
         }
+        if (agentCommand === 'bet' && agentArguments[0] === 'propose') {
+            const options = parseAgentBetProposeOptions(agentArguments.slice(1));
+            const result = await agentClient.createBet({
+                title: options.title,
+                hypothesis: options.hypothesis,
+                description: options.description ?? null,
+            }, options.idempotencyKey, currentDirectory);
+            streams.stdout.write(result.replayed
+                ? `Propuesta #${result.bet.id} ya existía: ${safeTerminalText(result.bet.title)} [propuesta].\n`
+                : `Propuesta #${result.bet.id} creada: ${safeTerminalText(result.bet.title)} [propuesta].\n`);
+            return 0;
+        }
         if (agentCommand === 'bet' && agentArguments[0] === 'status') {
             const options = parseAgentBetStatusOptions(agentArguments.slice(1));
             const result = await agentClient.updateBetStatus(options.betId, options.status, currentDirectory);
@@ -2312,6 +2324,42 @@ export function parseAgentBetEvidenceOptions(argumentsList) {
     return { betId, evidence: options };
 }
 
+export function parseAgentBetProposeOptions(argumentsList) {
+    const fieldNames = new Set(['title', 'hypothesis', 'description', 'idempotency-key']);
+    const values = {};
+    for (const argument of argumentsList) {
+        const separator = argument.indexOf('=');
+        if (!argument.startsWith('--') || separator < 3) {
+            throw new Error('Uso: mycompany agent bet propose --title=TEXTO --hypothesis=TEXTO --idempotency-key=UUID [--description=TEXTO].');
+        }
+        const name = argument.slice(2, separator);
+        const value = argument.slice(separator + 1);
+        if (!fieldNames.has(name) || value === '' || Object.hasOwn(values, name)) {
+            throw new Error('Opción desconocida, vacía o repetida para proponer una apuesta.');
+        }
+        values[name] = value;
+    }
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (typeof values.title !== 'string' || values.title.trim() === '' || values.title.length > 160) {
+        throw new Error('El título es obligatorio y admite hasta 160 caracteres.');
+    }
+    if (typeof values.hypothesis !== 'string' || values.hypothesis.trim() === '' || values.hypothesis.length > 4000) {
+        throw new Error('La hipótesis es obligatoria y admite hasta 4000 caracteres.');
+    }
+    if (values.description !== undefined && values.description.length > 4000) {
+        throw new Error('La descripción admite hasta 4000 caracteres.');
+    }
+    if (!uuidPattern.test(values['idempotency-key'] ?? '')) {
+        throw new Error('Falta --idempotency-key o no contiene un UUID válido.');
+    }
+    return {
+        title: values.title,
+        hypothesis: values.hypothesis,
+        ...(values.description === undefined ? {} : { description: values.description }),
+        idempotencyKey: values['idempotency-key'],
+    };
+}
+
 export function parseAgentBetStatusOptions(argumentsList) {
     if (argumentsList.length !== 2) throw new Error('Uso: mycompany agent bet status ID ESTADO.');
     const [betId, status] = argumentsList;
@@ -2629,6 +2677,8 @@ function printHelp(stdout) {
     stdout.write('    Descarga un informe con artifacts.read a una nueva ruta dentro de la carpeta de empresa.\n');
     stdout.write('  mycompany agent bet ID\n');
     stdout.write('    Muestra hipótesis, descripción y evidencias de una apuesta permitida, como texto sin ejecutarlas.\n');
+    stdout.write('  mycompany agent bet propose --title=TEXTO --hypothesis=TEXTO --idempotency-key=UUID [--description=TEXTO]\n');
+    stdout.write('    Crea una propuesta en estado inicial con bets.manage; no permite elegir estado ni convertirla en oferta. Reutiliza la clave al reintentar.\n');
     stdout.write('  mycompany agent bet evidence ID --title=TEXTO --details=TEXTO --assessment=supports|challenges|neutral [--source-url=URL]\n');
     stdout.write('    Registra una observación en la apuesta con bets.manage y conserva el agente que la aportó. No cambia el estado de la apuesta.\n');
     stdout.write('  mycompany agent bet status ID ESTADO\n');
