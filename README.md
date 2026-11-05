@@ -10,6 +10,8 @@
 
 The CLI talks to MyCompanies through its HTTP API and has no direct database connection. Server database migrations, credentials, backups, and deployment belong to the Laravel repository; Runner needs only its API URL and its own revocable credential. This validation does not change the Runner protocol or local Runner configuration. The server's opt-in MariaDB HTTP checks cover the Runners page, heartbeat, a complete authorized workspace-check cycle (web authorization, claim, and result), Agent task-list and task-detail tenant isolation, and idempotent Agent task creation. Exact database/socket guards and transaction rollback are documented in the main repository's `docs/continuidad.md`; run them with `phpunit.mariadb.xml`. PHP test temporary-directory configuration belongs to the Laravel server; Runner's Node test workflow stays independent.
 
+The MVP acceptance plan covers dependable business workflows and a usable responsive web interface for managing and tracking company work. Navigation changes such as a collapsible mobile sidebar, contextual tabs, modal forms, authorized Markdown observations, and a people/Agent organization chart belong to the Laravel server UI; they do not change the Runner's API or release lifecycle. The organization chart is informational and does not grant permissions. Runner development during MVP closure should focus on defects or capabilities needed to verify the end-to-end flows. Optional CLI expansion and npm publication remain separate follow-up work. See the server repository's `docs/plan-de-cierre-mvp.md` for the current order and acceptance criteria.
+
 ## Install
 
 Once published to npm:
