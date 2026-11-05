@@ -28,7 +28,23 @@ test('company initialization creates assistant instructions and the fixed compan
             'tasks/README.md',
         ]);
         assert.match(await readFile(path.join(directory, 'AGENTS.md'), 'utf8'), /company-root instructions/);
-        assert.match(await readFile(path.join(directory, 'CLAUDE.md'), 'utf8'), /company-root instructions/);
+        const claudeInstructions = await readFile(path.join(directory, 'CLAUDE.md'), 'utf8');
+        assert.match(claudeInstructions, /company-root instructions/);
+        for (const instructions of [await readFile(path.join(directory, 'AGENTS.md'), 'utf8'), claudeInstructions]) {
+            assert.match(instructions, /supported command is `mycompany`/);
+            assert.match(instructions, /mycompany agent me/);
+            assert.match(instructions, /mycompany agent tasks/);
+            assert.match(instructions, /mycompany agent task ID/);
+            assert.match(instructions, /mycompany agent goals/);
+            assert.match(instructions, /`memory`/);
+            assert.match(instructions, /role label such as CEO/);
+            assert.match(instructions, /mycompany tasks/);
+            assert.match(instructions, /Runner/);
+            assert.match(instructions, /These commands read/);
+            assert.match(instructions, /do not assume.*config file/i);
+            assert.match(instructions, /company situation|company assessment/i);
+            assert.match(instructions, /current CLI state/);
+        }
         assert.match(await readFile(path.join(directory, 'automations/README.md'), 'utf8'), /Each automation lives/);
         assert.match(await readFile(path.join(directory, 'reports/README.md'), 'utf8'), /company records/);
         assert.match(await readFile(path.join(directory, 'agents/README.md'), 'utf8'), /persistent agent/);
@@ -37,21 +53,28 @@ test('company initialization creates assistant instructions and the fixed compan
     });
 });
 
-test('company initialization updates only its managed instruction block and preserves user content', async () => {
+test('company initialization updates both managed instruction blocks and preserves user content', async () => {
     await withTemporaryDirectory(async (directory) => {
-        await writeFile(path.join(directory, 'AGENTS.md'), '# My company\n\nMy own rules.\n');
+        for (const filename of ['AGENTS.md', 'CLAUDE.md']) {
+            await writeFile(path.join(directory, filename), `# My company\n\nMy own rules in ${filename}.\n`);
+        }
         await initializeCompanyRoot(directory);
-        const originalInstructions = await readFile(path.join(directory, 'AGENTS.md'), 'utf8');
-        await writeFile(path.join(directory, 'AGENTS.md'), `${originalInstructions.replace('Keep human work, AI-assisted work, and scheduled script automations distinct.', 'Old instructions.') }\n## Local addition\nKeep this.\n`);
+        for (const filename of ['AGENTS.md', 'CLAUDE.md']) {
+            const originalInstructions = await readFile(path.join(directory, filename), 'utf8');
+            await writeFile(path.join(directory, filename), `${originalInstructions.replace('The supported command is', 'The old command is')}\n## Local addition\nKeep this.\n`);
+        }
 
         const result = await initializeCompanyRoot(directory);
-        const instructions = await readFile(path.join(directory, 'AGENTS.md'), 'utf8');
 
-        assert.equal(result.updated.includes('AGENTS.md'), true);
-        assert.match(instructions, /My own rules\./);
-        assert.match(instructions, /Keep this\./);
-        assert.equal((instructions.match(/BEGIN MYCOMPANIES MANAGED INSTRUCTIONS/g) ?? []).length, 1);
-        assert.equal((instructions.match(/END MYCOMPANIES MANAGED INSTRUCTIONS/g) ?? []).length, 1);
+        for (const filename of ['AGENTS.md', 'CLAUDE.md']) {
+            const instructions = await readFile(path.join(directory, filename), 'utf8');
+            assert.equal(result.updated.includes(filename), true);
+            assert.match(instructions, new RegExp(`My own rules in ${filename}\\.`));
+            assert.match(instructions, /Keep this\./);
+            assert.match(instructions, /The supported command is `mycompany`/);
+            assert.equal((instructions.match(/BEGIN MYCOMPANIES MANAGED INSTRUCTIONS/g) ?? []).length, 1);
+            assert.equal((instructions.match(/END MYCOMPANIES MANAGED INSTRUCTIONS/g) ?? []).length, 1);
+        }
     });
 });
 
