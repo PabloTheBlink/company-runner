@@ -791,7 +791,11 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
             return;
         }
         if (request.url === '/api/v1/agent/tasks/42/claim/finish') {
-            assert.equal(JSON.parse(body).claim_token, claimToken);
+            assert.deepEqual(JSON.parse(body), {
+                claim_token: claimToken,
+                status: 'completed',
+                summary: 'Resumen preparado.',
+            });
             response.end(JSON.stringify({ task: { id: 42, status: 'completed' }, replayed: false }));
             return;
         }

@@ -16,6 +16,7 @@ test('parses only a bounded structured task result with an allowed final state',
         assert.throws(() => parseAgentWorkResponse(invalid));
     }
     assert.throws(() => parseAgentWorkResponse('x'.repeat(16_385)), /supera el límite/);
+    assert.throws(() => parseAgentWorkResponse(JSON.stringify({ status: 'completed', summary: 'x'.repeat(4001) })), /formato estructurado/);
 });
 
 test('worker skips tasks assigned elsewhere and active leases, then finishes only the claimed task', async () => {
@@ -46,8 +47,8 @@ test('worker skips tasks assigned elsewhere and active leases, then finishes onl
             return { task_id: taskId, claim_token: token, lease_expires_at: '2026-11-05T12:02:00Z' };
         },
         heartbeatTaskClaim: async () => ({ renewed: true }),
-        finishTaskClaim: async (taskId, token, status) => {
-            finished.push({ taskId, token, status });
+        finishTaskClaim: async (taskId, token, status, summary) => {
+            finished.push({ taskId, token, status, summary });
             return { task: { id: taskId, status }, replayed: false };
         },
         executeTask: async ({ task, provider, signal }) => {
@@ -62,7 +63,7 @@ test('worker skips tasks assigned elsewhere and active leases, then finishes onl
     assert.equal(result.finish.task.status, 'completed');
     assert.deepEqual(claims.map(({ taskId }) => taskId), [2, 3]);
     assert.equal(claims[0].token.length, 80);
-    assert.deepEqual(finished, [{ taskId: 3, token: 'C'.repeat(80), status: 'completed' }]);
+    assert.deepEqual(finished, [{ taskId: 3, token: 'C'.repeat(80), status: 'completed', summary: 'Informe listo.' }]);
     assert.equal(executed.length, 1);
     assert.equal(executed[0].task.id, 3);
     assert.equal(executed[0].provider, 'codex');

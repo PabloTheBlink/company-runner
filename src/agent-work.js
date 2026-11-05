@@ -21,7 +21,7 @@ export function parseAgentWorkResponse(response) {
         || !['completed', 'blocked', 'open'].includes(parsed.status)
         || typeof parsed.summary !== 'string'
         || parsed.summary.trim().length < 1
-        || Buffer.byteLength(parsed.summary, 'utf8') > 8_000) {
+        || Buffer.byteLength(parsed.summary, 'utf8') > 4_000) {
         throw new Error('El proveedor no devolvió el formato estructurado de tarea esperado.');
     }
 
@@ -126,12 +126,12 @@ export async function runAgentWorkOnce({
                 || !['completed', 'blocked', 'open'].includes(outcome.status)
                 || typeof outcome.summary !== 'string'
                 || outcome.summary.trim().length < 1
-                || Buffer.byteLength(outcome.summary, 'utf8') > 8_000) {
+                || Buffer.byteLength(outcome.summary, 'utf8') > 4_000) {
                 throw new Error('El proveedor no devolvió un resultado estructurado válido.');
             }
 
             await heartbeatTaskClaim(candidate.id, claimToken, currentDirectory);
-            const finish = await finishTaskClaim(candidate.id, claimToken, outcome.status, currentDirectory);
+            const finish = await finishTaskClaim(candidate.id, claimToken, outcome.status, outcome.summary, currentDirectory);
             return { task, outcome, finish };
         } finally {
             clearIntervalImplementation(heartbeat);

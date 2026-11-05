@@ -269,7 +269,7 @@ test('agent task lease claim, heartbeat and finish keep the lease token in authe
             const client = new AgentClient(configStore);
             const claim = await client.claimTask(26, claimToken, companyRoot);
             const heartbeat = await client.heartbeatTaskClaim(26, claimToken, companyRoot);
-            const finished = await client.finishTaskClaim(26, claimToken, 'completed', companyRoot);
+            const finished = await client.finishTaskClaim(26, claimToken, 'completed', 'Resumen preparado.', companyRoot);
 
             assert.equal(claim.claim_token, claimToken);
             assert.equal(heartbeat.renewed, true);
@@ -277,11 +277,11 @@ test('agent task lease claim, heartbeat and finish keep the lease token in authe
             assert.deepEqual(requests, [
                 { method: 'POST', url: '/api/v1/agent/tasks/26/claim', body: { claim_token: claimToken } },
                 { method: 'POST', url: '/api/v1/agent/tasks/26/claim/heartbeat', body: { claim_token: claimToken } },
-                { method: 'POST', url: '/api/v1/agent/tasks/26/claim/finish', body: { claim_token: claimToken, status: 'completed' } },
+                { method: 'POST', url: '/api/v1/agent/tasks/26/claim/finish', body: { claim_token: claimToken, status: 'completed', summary: 'Resumen preparado.' } },
             ]);
             await assert.rejects(client.claimTask(0, claimToken, companyRoot), /ID de tarea/);
             await assert.rejects(client.claimTask(26, 'short', companyRoot), /token/);
-            await assert.rejects(client.finishTaskClaim(26, claimToken, 'cancelled', companyRoot), /estado final/);
+            await assert.rejects(client.finishTaskClaim(26, claimToken, 'cancelled', 'Resumen preparado.', companyRoot), /estado final/);
         } finally {
             server.close();
             await once(server, 'close');

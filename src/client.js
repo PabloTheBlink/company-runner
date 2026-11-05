@@ -1086,7 +1086,7 @@ export class AgentClient {
         return claim;
     }
 
-    async finishTaskClaim(taskId, claimToken, status, currentDirectory = process.cwd()) {
+    async finishTaskClaim(taskId, claimToken, status, summary, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(taskId) || taskId < 1) {
             throw new Error('El ID de tarea debe ser un entero positivo.');
         }
@@ -1096,12 +1096,15 @@ export class AgentClient {
         if (!['completed', 'blocked', 'open'].includes(status)) {
             throw new Error('El estado final debe ser completed, blocked u open.');
         }
+        if (typeof summary !== 'string' || summary.trim().length < 1 || Buffer.byteLength(summary, 'utf8') > 4_000) {
+            throw new Error('El resumen del resultado debe contener texto y no superar 4000 bytes.');
+        }
 
         const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
         const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
         const response = await this.postJson(
             `${serverUrl}/api/v1/agent/tasks/${taskId}/claim/finish`,
-            { claim_token: claimToken, status },
+            { claim_token: claimToken, status, summary },
             configuration.api_token,
         );
         if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401).');
