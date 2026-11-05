@@ -1023,7 +1023,7 @@ test('the executable command is named mycompany and help uses that name', async 
     const packageConfiguration = JSON.parse(await readFile(packagePath, 'utf8'));
     const output = { value: '', write(chunk) { this.value += chunk; } };
 
-    assert.deepEqual(packageConfiguration.bin, { mycompany: './src/cli.js' });
+    assert.deepEqual(packageConfiguration.bin, { mycompany: 'src/cli.js' });
     assert.equal(await run(['help'], { stdout: output }), 0);
     assert.match(output.value, /mycompany heartbeat/);
     assert.match(output.value, /mycompany init/);

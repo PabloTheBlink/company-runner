@@ -249,3 +249,5 @@ npm publish
 ```
 
 The npm account must own or have publish access to the unscoped package name `mycompanies-runner`. GitHub pushes do not publish the package to npm.
+
+Keep `bin.mycompany` as `src/cli.js` without a leading `./`. npm 11 removes that executable during publish normalization when the path has the prefix; `test/package.test.js` guards the published manifest.
