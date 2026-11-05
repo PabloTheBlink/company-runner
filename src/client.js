@@ -2236,7 +2236,7 @@ function isMemoryNode(node) {
         && (node.source_reference === null || typeof node.source_reference === 'string')
         && node.created_by !== null
         && typeof node.created_by === 'object'
-        && ['user', 'agent', 'legacy'].includes(node.created_by.type)
+        && ['user', 'agent', 'legacy', 'system'].includes(node.created_by.type)
         && (node.created_by.id === null || Number.isSafeInteger(node.created_by.id))
         && typeof node.created_by.name === 'string'
         && typeof node.created_at === 'string'

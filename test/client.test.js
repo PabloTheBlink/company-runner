@@ -2202,7 +2202,11 @@ test('Agent memory client lists only authorized topics, reads scoped entries, an
             }
             if (request.method === 'GET' && request.url === '/api/v1/agent/memory/search?q=alertas&topic_id=7&workspace_id=3') {
                 response.writeHead(200, { 'content-type': 'application/json' });
-                response.end(JSON.stringify({ memory: [{ ...node, relevance: 0.82 }] }));
+                response.end(JSON.stringify({ memory: [{
+                    ...node,
+                    created_by: { type: 'system', id: null, name: 'MyCompanies importer' },
+                    relevance: 0.82,
+                }] }));
                 return;
             }
             if (request.method === 'GET' && request.url === '/api/v1/agent/memory/81') {

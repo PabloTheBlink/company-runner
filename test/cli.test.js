@@ -1129,8 +1129,21 @@ test('agent memory CLI lists company topics and hides unauthorized topics', asyn
     await mkdir(companyRoot, { recursive: true });
     const token = 'M'.repeat(80);
     const server = createServer((request, response) => {
-        assert.equal(request.url, '/api/v1/agent/memory/topics');
         assert.equal(request.headers.authorization, `Bearer ${token}`);
+        if (request.url === '/api/v1/agent/memory/search?q=alertas&topic_id=7&workspace_id=3') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ memory: [{
+                id: 81,
+                topic: { id: 7, name: 'Mercado' },
+                workspace: { id: 3, name: 'Marketing' },
+                kind: 'observation', title: 'Señal de mercado', content: 'Consultas sobre alertas.',
+                source_type: 'manual', source_reference: null,
+                created_by: { type: 'system', id: null, name: 'MyCompanies importer' },
+                created_at: '2026-11-05T10:00:00Z', relations: [], relevance: 0.82,
+            }] }));
+            return;
+        }
+        assert.equal(request.url, '/api/v1/agent/memory/topics');
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ topics: [{
             id: 7, name: 'Mercado', can_read: true, can_write: false,
@@ -1153,6 +1166,10 @@ test('agent memory CLI lists company topics and hides unauthorized topics', asyn
         assert.equal(await run(['agent', 'memory', 'topics'], { stdout }, companyRoot, configStore), 0);
         assert.match(stdout.value, /#7 Mercado/);
         assert.match(stdout.value, /lectura workspaces 3/);
+        stdout.value = '';
+        assert.equal(await run(['agent', 'memory', 'search', '--query=alertas', '--topic=7', '--workspace=3'], { stdout }, companyRoot, configStore), 0);
+        assert.match(stdout.value, /Sistema MyCompanies importer/);
+        assert.match(stdout.value, /82\.0%/);
     } finally {
         server.close();
         await once(server, 'close');

@@ -1723,7 +1723,7 @@ function safeTerminalText(value) {
 
 function printMemoryNode(stdout, memory) {
     const workspace = memory.workspace === null ? 'Empresa' : `Workspace ${safeTerminalText(memory.workspace.name)}`;
-    const authorLabel = { agent: 'Agente', user: 'Persona', legacy: 'Histórico' }[memory.created_by.type];
+    const authorLabel = { agent: 'Agente', user: 'Persona', legacy: 'Histórico', system: 'Sistema' }[memory.created_by.type];
     const author = `${authorLabel} ${safeTerminalText(memory.created_by.name)}`;
     stdout.write(`#${memory.id} [${memory.kind}] ${safeTerminalText(memory.title)} · tema ${safeTerminalText(memory.topic.name)} · ${workspace} · ${author}\n`);
     stdout.write(`${safeTerminalText(memory.content)}\n`);
