@@ -426,6 +426,18 @@ export async function run(
                 if (result.has_more) streams.stdout.write(`Hay más entradas. Continúa con: mycompany agent memory list --after=${result.next_after}\n`);
                 return 0;
             }
+            if (memoryCommand === 'search') {
+                const result = await agentClient.searchMemory(options, currentDirectory);
+                if (result.memory.length === 0) {
+                    streams.stdout.write('No hay resultados de memoria con embeddings disponibles en ese ámbito autorizado.\n');
+                    return 0;
+                }
+                for (const memory of result.memory) {
+                    printMemoryNode(streams.stdout, memory);
+                    streams.stdout.write(`Relevancia semántica: ${(memory.relevance * 100).toFixed(1)}% · solo orden orientativo, no indica veracidad.\n`);
+                }
+                return 0;
+            }
             if (memoryCommand === 'show') {
                 const memory = await agentClient.getMemory(options.memoryId, currentDirectory);
                 printMemoryNode(streams.stdout, memory);
@@ -1048,6 +1060,20 @@ export function parseAgentBetsOptions(argumentsList) {
 
 export function parseAgentMemoryOptions(command, argumentsList) {
     if (command === 'topics' && argumentsList.length === 0) return {};
+    if (command === 'search') {
+        const values = {};
+        for (const argument of argumentsList) {
+            const match = /^--(query|topic|workspace)=(.*)$/.exec(argument);
+            if (match === null || Object.hasOwn(values, match[1])) throw new Error('Uso: mycompany agent memory search --query=TEXTO [--topic=ID] [--workspace=ID].');
+            values[match[1]] = match[2];
+        }
+        if (!values.query?.trim() || values.query.trim().length < 2) throw new Error('La búsqueda requiere --query con al menos dos caracteres.');
+        return {
+            query: values.query.trim(),
+            topicId: values.topic === undefined ? null : parseTaskId(values.topic),
+            workspaceId: values.workspace === undefined ? null : parseTaskId(values.workspace),
+        };
+    }
     if (command === 'list') {
         const values = {};
         for (const argument of argumentsList) {
@@ -1083,7 +1109,7 @@ export function parseAgentMemoryOptions(command, argumentsList) {
             sourceType, sourceReference: values['source-reference'] ?? null,
         } };
     }
-    throw new Error('Uso: mycompany agent memory topics | list [filtros] | show ID | add --topic=ID --kind=TIPO --title=TÍTULO --content=TEXTO.');
+    throw new Error('Uso: mycompany agent memory topics | list [filtros] | search --query=TEXTO [--topic=ID] [--workspace=ID] | show ID | add --topic=ID --kind=TIPO --title=TÍTULO --content=TEXTO.');
 }
 
 export function parseAgentOffersOptions(argumentsList) {
@@ -1627,6 +1653,8 @@ function printHelp(stdout) {
     stdout.write('    Lista tareas activas permitidas por los grants Agent actuales. No las modifica ni las ejecuta.\n');
     stdout.write('  mycompany agent memory topics | list [--topic=ID] [--workspace=ID] [--after=ID] | show ID\n');
     stdout.write('    Lee solo temas y entradas autorizados para esta identidad Agent; los temas pertenecen a una empresa.\n');
+    stdout.write('  mycompany agent memory search --query=TEXTO [--topic=ID] [--workspace=ID]\n');
+    stdout.write('    Busca por similitud semántica dentro de ámbitos autorizados; la relevancia ordena resultados, no verifica su verdad.\n');
     stdout.write('  mycompany agent memory add --topic=ID --kind=TIPO --title=TÍTULO --content=TEXTO [--workspace=ID] [--source-type=TIPO] [--source-reference=REF]\n');
     stdout.write('    Añade conocimiento al tema si tiene memory.write. La API vuelve a comprobar empresa, tema y Workspace.\n');
     stdout.write('  mycompany agent bets [--after=ID]\n');

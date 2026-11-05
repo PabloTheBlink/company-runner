@@ -1165,6 +1165,7 @@ test('agent memory CLI lists company topics and hides unauthorized topics', asyn
 });
 
 test('agent memory CLI validates filters, entries and source URLs', () => {
+    assert.deepEqual(parseAgentMemoryOptions('search', ['--query=alertas', '--topic=7', '--workspace=3']), { query: 'alertas', topicId: 7, workspaceId: 3 });
     assert.deepEqual(parseAgentMemoryOptions('list', ['--topic=7', '--workspace=3', '--after=80']), { topicId: 7, workspaceId: 3, afterId: 80 });
     assert.deepEqual(parseAgentMemoryOptions('show', ['81']), { memoryId: 81 });
     assert.throws(() => parseAgentMemoryOptions('list', ['--topic=0']), /positivo/);

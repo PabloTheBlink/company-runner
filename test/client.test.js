@@ -2200,6 +2200,11 @@ test('Agent memory client lists only authorized topics, reads scoped entries, an
                 response.end(JSON.stringify({ memory: [node], has_more: false, next_after: null }));
                 return;
             }
+            if (request.method === 'GET' && request.url === '/api/v1/agent/memory/search?q=alertas&topic_id=7&workspace_id=3') {
+                response.writeHead(200, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ memory: [{ ...node, relevance: 0.82 }] }));
+                return;
+            }
             if (request.method === 'GET' && request.url === '/api/v1/agent/memory/81') {
                 response.writeHead(200, { 'content-type': 'application/json' });
                 response.end(JSON.stringify({ memory: node }));
@@ -2240,6 +2245,8 @@ test('Agent memory client lists only authorized topics, reads scoped entries, an
             }] });
             const list = await client.listMemory({ topicId: 7, workspaceId: 3, afterId: 80 }, companyRoot);
             assert.equal(list.memory[0].title, 'Sube el interés');
+            const search = await client.searchMemory({ query: 'alertas', topicId: 7, workspaceId: 3 }, companyRoot);
+            assert.equal(search.memory[0].relevance, 0.82);
             assert.equal((await client.getMemory(81, companyRoot)).memory.content, node.content);
             assert.equal((await client.addMemory({
                 topicId: 7,

@@ -823,6 +823,32 @@ export class AgentClient {
         return response.body;
     }
 
+    async searchMemory(options = {}, currentDirectory = process.cwd()) {
+        if (options === null || typeof options !== 'object' || Array.isArray(options)
+            || Object.keys(options).some((key) => !['query', 'topicId', 'workspaceId'].includes(key))
+            || typeof options.query !== 'string' || options.query.trim().length < 2 || options.query.length > 2000) {
+            throw new Error('Las opciones de búsqueda semántica no son válidas.');
+        }
+        validateOptionalPositiveId(options.topicId, 'tema');
+        validateOptionalPositiveId(options.workspaceId, 'Workspace');
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const query = new URLSearchParams({ q: options.query.trim() });
+        if (options.topicId !== undefined && options.topicId !== null) query.set('topic_id', String(options.topicId));
+        if (options.workspaceId !== undefined && options.workspaceId !== null) query.set('workspace_id', String(options.workspaceId));
+        const response = await this.getJson(`${serverUrl}/api/v1/agent/memory/search?${query.toString()}`, configuration.api_token);
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401). Comprueba si fue revocada o si el perfil está pausado.');
+        if (response.status === 403) throw new Error('El agente no tiene memory.read para ese ámbito de empresa, Workspace o tema (HTTP 403).');
+        if (response.status === 422) throw new Error('MyCompanies rechazó el texto o ámbito de búsqueda (HTTP 422).');
+        if (response.status === 429) throw new Error('MyCompanies limitó las solicitudes (HTTP 429). Vuelve a intentarlo más tarde.');
+        if (response.status === 503) throw new Error('La búsqueda semántica no está disponible en MyCompanies (HTTP 503).');
+        if (response.status !== 200 || !Array.isArray(response.body.memory) || response.body.memory.length > 20
+            || response.body.memory.some((node) => !isMemoryNode(node) || !Number.isFinite(node.relevance) || node.relevance < -1 || node.relevance > 1)) {
+            throw new Error('MyCompanies devolvió resultados de memoria no válidos.');
+        }
+        return response.body;
+    }
+
     async addMemory(entry, currentDirectory = process.cwd()) {
         if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('La entrada de memoria no es válida.');
         validateOptionalPositiveId(entry.topicId, 'tema', true);
