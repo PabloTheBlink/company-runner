@@ -419,7 +419,7 @@ test('agent delegation apply rechecks the parent and direct report before creati
     };
     const child = {
         id: 501, title: 'Revisar datos', description: 'Subtarea de MyCompanies #140.\n\nComprobar evidencia disponible.',
-        status: 'open', priority: 'normal', due_date: null, workspace: { id: 4, name: 'Licitaciones Alerta' },
+        status: 'open', priority: 'normal', due_date: null, parent_task_id: 140, workspace: { id: 4, name: 'Licitaciones Alerta' },
     };
     const session = {
         id: 81, agent_id: 25, task_id: 140, provider: 'codex', status: 'running', phase: 'starting',
@@ -431,6 +431,9 @@ test('agent delegation apply rechecks the parent and direct report before creati
         const body = rawBody === '' ? null : JSON.parse(rawBody);
         requests.push({ method: request.method, url: request.url, body, key: request.headers['idempotency-key'] });
         assert.equal(request.headers.authorization, `Bearer ${token}`);
+        if (request.method === 'POST' && request.url === '/api/v1/agent/tasks') {
+            assert.equal(body.parent_task_id, 140);
+        }
         response.writeHead(request.method === 'POST' && request.url === '/api/v1/agent/runtime-sessions'
             ? 201
             : request.method === 'POST' && request.url === '/api/v1/agent/tasks' ? 201 : 200,
@@ -489,6 +492,7 @@ test('agent delegation apply rechecks the parent and direct report before creati
             priority: 'normal',
             due_date: null,
             workspace_id: 4,
+            parent_task_id: 140,
         });
         assert.match(requests.find(({ url }) => url === '/api/v1/agent/tasks')?.key ?? '', /^[0-9a-f-]{36}$/);
         assert.ok(requests.some(({ method, url, body }) => method === 'PATCH' && url === '/api/v1/agent/tasks/501/assignee' && body.assignee_agent_id === 6));

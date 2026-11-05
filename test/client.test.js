@@ -1478,6 +1478,7 @@ test('agent task creation sends a stable idempotency key and returns the server 
                 priority: 'high',
                 due_date: null,
                 workspace_id: null,
+                parent_task_id: null,
             });
             response.writeHead(201, { 'content-type': 'application/json' });
             response.end(JSON.stringify({

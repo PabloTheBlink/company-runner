@@ -72,6 +72,7 @@ test('applies tasks sequentially through the authenticated client and stops on a
     assert.equal(applied[0].task.id, 501);
     assert.equal(calls[0][0], 'create');
     assert.equal(calls[0][1].workspace_id, 4);
+    assert.equal(calls[0][1].parent_task_id, 140);
     assert.match(calls[0][1].description, /Subtarea de MyCompanies #140/);
     assert.deepEqual(calls[1], ['assign', 501, 17]);
 

@@ -260,6 +260,8 @@ export async function run(
                     description: task.description,
                     priority: task.priority,
                     workspace: { id: task.workspace.id, name: task.workspace.name },
+                    parent_task_id: task.parent_task_id ?? null,
+                    child_tasks: task.child_tasks ?? [],
                 },
                 eligible_reports: reports
                     .filter((report) => report.status === 'active')
@@ -1337,6 +1339,7 @@ function getAgentRuntimeTaskFingerprint(task) {
         description: task.description,
         priority: task.priority,
         due_date: task.due_date,
+        parent_task_id: task.parent_task_id ?? null,
         assignee: { type: task.assignee.type, id: task.assignee.id },
         workspace: task.workspace === null ? null : { id: task.workspace.id, name: task.workspace.name },
     });
@@ -1348,6 +1351,7 @@ function getDelegationTaskFingerprint(task) {
         title: task.title,
         description: task.description,
         status: task.status,
+        parent_task_id: task.parent_task_id ?? null,
         assignee: { type: task.assignee.type, id: task.assignee.id },
         workspace: task.workspace === null ? null : { id: task.workspace.id },
     });
@@ -1365,6 +1369,9 @@ function createAgentRuntimePrompt(identity, task, allowNetwork = false, memory =
             due_date: task.due_date,
             status: task.status,
             workspace: task.workspace?.name ?? null,
+            parent_task_id: task.parent_task_id ?? null,
+            child_tasks: task.child_tasks ?? [],
+            child_tasks_has_more: task.child_tasks_has_more ?? false,
         },
         memory: memory.map((entry) => ({
             id: entry.id,

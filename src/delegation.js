@@ -74,6 +74,7 @@ export async function applyDelegationPlan({ parentTaskId, tasks, createTask, ass
             description: `Subtarea de MyCompanies #${parentTaskId}.\n\n${plannedTask.description}`,
             priority: plannedTask.priority,
             workspace_id: plannedTask.workspaceId,
+            parent_task_id: parentTaskId,
         }, plannedTask.idempotencyKey);
         const task = created?.task ?? created;
         if (!Number.isSafeInteger(task?.id) || task.id < 1) {

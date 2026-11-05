@@ -2054,6 +2054,7 @@ export class AgentClient {
             priority: taskData.priority ?? 'normal',
             due_date: taskData.due_date ?? null,
             workspace_id: taskData.workspace_id ?? null,
+            parent_task_id: taskData.parent_task_id ?? null,
         };
         const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
         const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
@@ -2342,7 +2343,18 @@ function isAgentTask(task, includeDescription = false) {
             || (typeof task.workspace === 'object'
                 && Number.isInteger(task.workspace.id)
                 && task.workspace.id > 0
-                && typeof task.workspace.name === 'string'));
+                && typeof task.workspace.name === 'string'))
+        && (task.parent_task_id === undefined || task.parent_task_id === null
+            || Number.isSafeInteger(task.parent_task_id) && task.parent_task_id > 0)
+        && (task.child_tasks === undefined
+            || Array.isArray(task.child_tasks) && task.child_tasks.length <= 100
+                && task.child_tasks.every((child) => child !== null
+                    && typeof child === 'object'
+                    && Number.isSafeInteger(child.id) && child.id > 0
+                    && typeof child.title === 'string'
+                    && ['open', 'in_progress', 'blocked', 'completed', 'cancelled'].includes(child.status)
+                    && (child.assignee === null || isRunnerAssignee(child.assignee))))
+        && (task.child_tasks_has_more === undefined || typeof task.child_tasks_has_more === 'boolean');
 }
 
 function isAgentRuntimeSession(session, expectedAgentId, expectedTaskId = null, expectedProvider = null) {
@@ -2664,7 +2676,9 @@ function isCreatedAgentTask(task) {
             || (typeof task.workspace === 'object'
                 && Number.isInteger(task.workspace.id)
                 && task.workspace.id > 0
-                && typeof task.workspace.name === 'string'));
+                && typeof task.workspace.name === 'string'))
+        && (task.parent_task_id === undefined || task.parent_task_id === null
+            || Number.isSafeInteger(task.parent_task_id) && task.parent_task_id > 0);
 }
 
 async function readResponseLimited(response, maximumBytes) {
