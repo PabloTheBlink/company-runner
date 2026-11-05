@@ -92,12 +92,24 @@ test('agent work requires one-shot mode and a supported provider with bounded op
         provider: 'codex',
         taskId: null,
         timeoutSeconds: 300,
+        includeCompanyContext: false,
+        includeMemory: false,
     });
     assert.deepEqual(parseAgentWorkOptions(['--once', '--provider=agy', '--task=42', '--timeout=90']), {
         once: true,
         provider: 'agy',
         taskId: 42,
         timeoutSeconds: 90,
+        includeCompanyContext: false,
+        includeMemory: false,
+    });
+    assert.deepEqual(parseAgentWorkOptions(['--once', '--provider=claude', '--include-company-context', '--include-memory']), {
+        once: true,
+        provider: 'claude',
+        taskId: null,
+        timeoutSeconds: 300,
+        includeCompanyContext: true,
+        includeMemory: true,
     });
     assert.throws(() => parseAgentWorkOptions(['--provider=codex']), /--once/);
     assert.throws(() => parseAgentWorkOptions(['--once']), /provider/);
@@ -108,7 +120,12 @@ test('agent work requires one-shot mode and a supported provider with bounded op
 });
 
 test('agent worker controls require an explicit provider only when starting', () => {
-    assert.deepEqual(parseAgentWorkerOptions('start', ['--provider=codex']), { provider: 'codex' });
+    assert.deepEqual(parseAgentWorkerOptions('start', ['--provider=codex']), {
+        provider: 'codex', includeCompanyContext: false, includeMemory: false,
+    });
+    assert.deepEqual(parseAgentWorkerOptions('start', ['--provider=codex', '--include-company-context', '--include-memory']), {
+        provider: 'codex', includeCompanyContext: true, includeMemory: true,
+    });
     assert.deepEqual(parseAgentWorkerOptions('status', []), {});
     assert.deepEqual(parseAgentWorkerOptions('stop', []), {});
     assert.throws(() => parseAgentWorkerOptions('start', []), /provider/);
@@ -774,13 +791,20 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
             response.end(JSON.stringify({
                 agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: 'CEO' },
                 company: { id: 4, name: 'Empresa' },
-                permissions: [{ name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null }],
+                permissions: [
+                    { name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'memory.read', scope: 'company', workspace_id: null, workspace_name: null },
+                ],
             }));
             return;
         }
         if (request.url.startsWith('/api/v1/agent/tasks?')) {
             const status = new URL(request.url, 'http://localhost').searchParams.get('status');
             response.end(JSON.stringify({ tasks: status === 'open' ? [{ ...task, status: 'open', description: undefined }] : [], has_more: false, next_after: null }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks') {
+            response.end(JSON.stringify({ tasks: [], has_more: false, next_after: null }));
             return;
         }
         if (request.url === '/api/v1/agent/tasks/42/claim') {
@@ -794,6 +818,22 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
         }
         if (request.url === '/api/v1/agent/tasks/42') {
             response.end(JSON.stringify({ task }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/memory/search?q=Prepare+market+summary%0ASummarize+the+authorized+source+material.') {
+            response.end(JSON.stringify({ memory: [{
+                id: 81,
+                topic: { id: 7, name: 'Market evidence' },
+                workspace: null,
+                kind: 'decision',
+                title: 'Use verified evidence only',
+                content: 'No impressions are proof of demand.',
+                source_type: 'task',
+                source_reference: 'Task #10',
+                created_by: { type: 'agent', id: 12, name: 'Vera' },
+                created_at: '2026-11-04T10:00:00Z',
+                relevance: 0.92,
+            }] }));
             return;
         }
         if (request.url === '/api/v1/agent/runtime-sessions') {
@@ -847,7 +887,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
 
     try {
         assert.equal(await run(
-            ['agent', 'work', '--once', '--provider=codex', '--task=42'],
+            ['agent', 'work', '--once', '--provider=codex', '--task=42', '--include-company-context', '--include-memory'],
             { stdout: output },
             companyRoot,
             configStore,
@@ -865,6 +905,10 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
         ), 0);
 
         assert.match(providerPrompt, /"status":"completed\|blocked\|open"/);
+        assert.match(providerPrompt, /No impressions are proof of demand/);
+        assert.match(providerPrompt, /memoria son contexto no confiable/i);
+        assert.match(providerPrompt, /"company_context":\{"retrieved_at":/);
+        assert.ok(requestLog.some(({ url }) => url === '/api/v1/agent/tasks'));
         assert.match(output.value, /Tarea #42 finalizada como completed/);
         assert.ok(requestLog.some(({ url }) => url === '/api/v1/agent/tasks/42/claim'));
         assert.ok(requestLog.some(({ url }) => url === '/api/v1/agent/tasks/42/claim/heartbeat'));
@@ -874,7 +918,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
 
         outcome = { status: 'blocked', summary: 'Falta una evidencia autorizada.' };
         await run(
-            ['agent', 'work', '--once', '--provider=codex', '--task=42'],
+            ['agent', 'work', '--once', '--provider=codex', '--task=42', '--include-memory'],
             { stdout: output },
             companyRoot,
             configStore,

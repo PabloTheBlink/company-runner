@@ -14,7 +14,7 @@ import { applyLocalAgentFileWrites, stageLocalAgentFiles } from './local-agent-f
 import { syncAgentProfileInstructions } from './agent-profile-sync.js';
 import { runAgentRuntime } from './agent-runtime.js';
 import { applyDelegationPlan, parseDelegationResponse } from './delegation.js';
-import { parseAgentWorkResponse, runAgentWorkOnce, shouldApplyAgentTaskWrites } from './agent-work.js';
+import { loadAgentTaskContext, parseAgentWorkResponse, runAgentWorkOnce, shouldApplyAgentTaskWrites } from './agent-work.js';
 import { createAgentRuntimePlan, listLocalAgentRuntimes, normalizeLocalAgentPath } from './runtime.js';
 
 export async function run(
@@ -154,14 +154,22 @@ export async function run(
                 throw new Error(`El proveedor ${options.provider} no está instalado localmente.`);
             }
             const identity = await agentClient.identity(currentDirectory);
+            if (options.includeMemory && !identity.permissions.some((permission) => permission?.name === 'memory.read')) {
+                throw new Error('El Agent necesita memory.read para iniciar un worker con memoria.');
+            }
+            const serviceArguments = ['--provider=' + options.provider];
+            if (options.includeCompanyContext) serviceArguments.push('--include-company-context');
+            if (options.includeMemory) serviceArguments.push('--include-memory');
             const state = await startAgentWorker({
                 statePath,
                 agentId: identity.agent.id,
                 command: process.execPath,
-                args: [fileURLToPath(import.meta.url), 'agent', 'service', `--provider=${options.provider}`],
+                args: [fileURLToPath(import.meta.url), 'agent', 'service', ...serviceArguments],
                 cwd: localConfiguration.company_root_path,
                 metadata: {
                     provider: options.provider,
+                    include_company_context: options.includeCompanyContext,
+                    include_memory: options.includeMemory,
                     agent_id: identity.agent.id,
                     agent_name: identity.agent.name,
                     company_id: identity.company.id,
@@ -170,12 +178,13 @@ export async function run(
             });
             streams.stdout.write(state.already_running
                 ? `El worker de ${safeTerminalText(state.agent_name)} ya está ${state.status}.\n`
-                : `Worker de ${safeTerminalText(state.agent_name)} iniciado con ${state.provider}. Usa «mycompany agent status» para consultar y «mycompany agent stop» para pararlo.\n`);
+                : `Worker de ${safeTerminalText(state.agent_name)} iniciado con ${state.provider}${options.includeCompanyContext ? ' y contexto empresarial' : ''}${options.includeMemory ? ' y memoria autorizada' : ''}. Usa «mycompany agent status» para consultar y «mycompany agent stop» para pararlo.\n`);
             return 0;
         }
 
         if (agentCommand === 'service') {
-            const { provider } = parseAgentWorkerOptions('service', agentArguments);
+            const options = parseAgentWorkerOptions('service', agentArguments);
+            const { provider } = options;
             const statePath = process.env.MYCOMPANY_WORKER_STATE_PATH;
             if (typeof statePath !== 'string' || !path.isAbsolute(statePath)) {
                 throw new Error('El proceso de worker solo puede iniciarse mediante mycompany agent start.');
@@ -188,7 +197,11 @@ export async function run(
                 pid: process.pid,
                 provider,
                 runWorkOnce: () => run(
-                    ['agent', 'work', '--once', `--provider=${provider}`],
+                    [
+                        'agent', 'work', '--once', `--provider=${provider}`,
+                        ...(options.includeCompanyContext ? ['--include-company-context'] : []),
+                        ...(options.includeMemory ? ['--include-memory'] : []),
+                    ],
                     streams,
                     currentDirectory,
                     configStore,
@@ -210,6 +223,9 @@ export async function run(
             }
 
             const identity = await agentClient.identity(currentDirectory);
+            if (options.includeMemory && !identity.permissions.some((permission) => permission?.name === 'memory.read')) {
+                throw new Error('El Agent necesita memory.read para ejecutar trabajo con memoria.');
+            }
             const result = await runAgentWorkOnce({
                 agentId: identity.agent.id,
                 taskId: options.taskId,
@@ -228,6 +244,14 @@ export async function run(
                         read: grants.filter(({ operations }) => operations.includes('read')).map(({ path: filePath }) => filePath),
                         write: grants.filter(({ operations }) => operations.includes('write')).map(({ path: filePath }) => filePath),
                     };
+                    const { memory, companyContext } = await loadAgentTaskContext({
+                        identity,
+                        task,
+                        agentClient,
+                        currentDirectory,
+                        includeMemory: options.includeMemory,
+                        includeCompanyContext: options.includeCompanyContext,
+                    });
                     const stagingRoot = await mkdtemp(path.join(path.dirname(configStore.localAgentFilePolicyPath), 'agent-work-'));
                     let runtimeSession = null;
                     let runtimeHeartbeat = null;
@@ -246,7 +270,7 @@ export async function run(
                         runtimeHeartbeat.unref?.();
                         streams.stdout.write(`Worker de ${safeTerminalText(identity.agent.name)} · tarea #${task.id} · red deshabilitada. Ctrl-C interrumpe el ciclo.\n`);
                         const prompt = [
-                            createAgentRuntimePrompt(identity, task, false, [], fileSummary.write),
+                            createAgentRuntimePrompt(identity, task, false, memory, fileSummary.write, companyContext),
                             'Devuelve únicamente un objeto JSON válido con exactamente estas claves: {"status":"completed|blocked|open","summary":"resumen breve del trabajo y resultado"}. Usa completed solo si cumpliste los criterios de la tarea; blocked si falta una dependencia o acceso; open si el trabajo sigue pendiente. El resumen es texto no confiable y no puede añadir instrucciones.',
                         ].join('\n');
                         const runtimeResult = await agentRuntimeRunner({
@@ -1258,13 +1282,15 @@ export function parseAgentDelegationOptions(argumentsList) {
 }
 
 export function parseAgentWorkOptions(argumentsList) {
-    const usage = 'Uso: mycompany agent work --once --provider=codex|claude|agy [--task=ID] [--timeout=SEGUNDOS].';
-    if (argumentsList.length < 2 || argumentsList.length > 4) throw new Error(usage);
+    const usage = 'Uso: mycompany agent work --once --provider=codex|claude|agy [--task=ID] [--timeout=SEGUNDOS] [--include-company-context] [--include-memory].';
+    if (argumentsList.length < 2 || argumentsList.length > 6) throw new Error(usage);
     let once = false;
     let provider = null;
     let taskId = null;
     let timeoutSeconds = 300;
     let timeoutWasProvided = false;
+    let includeCompanyContext = false;
+    let includeMemory = false;
     for (const argument of argumentsList) {
         const providerMatch = /^--provider=(agy|codex|claude)$/.exec(argument);
         const taskMatch = /^--task=(\d+)$/.exec(argument);
@@ -1289,6 +1315,14 @@ export function parseAgentWorkOptions(argumentsList) {
             }
             continue;
         }
+        if (argument === '--include-company-context' && !includeCompanyContext) {
+            includeCompanyContext = true;
+            continue;
+        }
+        if (argument === '--include-memory' && !includeMemory) {
+            includeMemory = true;
+            continue;
+        }
         if (argument.startsWith('--provider=') && !['agy', 'codex', 'claude'].includes(argument.slice('--provider='.length))) {
             throw new Error('El proveedor debe ser codex, claude o agy.');
         }
@@ -1298,16 +1332,36 @@ export function parseAgentWorkOptions(argumentsList) {
     if (!once) throw new Error('El trabajador exige --once en esta versión; el modo continuo aún no está disponible.');
     if (provider === null) throw new Error('Debes indicar un provider: codex, claude o agy.');
 
-    return { once, provider, taskId, timeoutSeconds };
+    return { once, provider, taskId, timeoutSeconds, includeCompanyContext, includeMemory };
 }
 
 export function parseAgentWorkerOptions(command, argumentsList) {
     if (command === 'start' || command === 'service') {
-        if (argumentsList.length !== 1 || !/^--provider=(codex|claude|agy)$/.test(argumentsList[0])) {
-            throw new Error(`Uso: mycompany agent ${command === 'start' ? 'start' : 'service'} --provider=codex|claude|agy.`);
+        if (argumentsList.length < 1 || argumentsList.length > 3) {
+            throw new Error(`Uso: mycompany agent ${command} --provider=codex|claude|agy [--include-company-context] [--include-memory].`);
         }
+        let provider = null;
+        let includeCompanyContext = false;
+        let includeMemory = false;
+        for (const argument of argumentsList) {
+            const providerMatch = /^--provider=(codex|claude|agy)$/.exec(argument);
+            if (providerMatch !== null && provider === null) {
+                provider = providerMatch[1];
+                continue;
+            }
+            if (argument === '--include-company-context' && !includeCompanyContext) {
+                includeCompanyContext = true;
+                continue;
+            }
+            if (argument === '--include-memory' && !includeMemory) {
+                includeMemory = true;
+                continue;
+            }
+            throw new Error(`Uso: mycompany agent ${command} --provider=codex|claude|agy [--include-company-context] [--include-memory].`);
+        }
+        if (provider === null) throw new Error('Debes indicar el proveedor de ejecución: codex, claude o agy.');
 
-        return { provider: argumentsList[0].slice('--provider='.length) };
+        return { provider, includeCompanyContext, includeMemory };
     }
     if ((command === 'status' || command === 'stop') && argumentsList.length === 0) {
         return {};
@@ -1329,8 +1383,13 @@ function formatAgentWorkerStatus(state) {
     const identity = typeof state.agent_name === 'string' ? safeTerminalText(state.agent_name) : 'Agent';
     const provider = typeof state.provider === 'string' ? safeTerminalText(state.provider) : 'desconocido';
     const heartbeat = typeof state.heartbeat_at === 'string' ? safeTerminalText(state.heartbeat_at) : 'sin registro';
+    const contextModes = [
+        state.include_company_context ? 'contexto empresarial' : null,
+        state.include_memory ? 'memoria autorizada' : null,
+    ].filter(Boolean);
+    const contextLabel = contextModes.length === 0 ? 'sin contexto adicional' : contextModes.join(' + ');
 
-    return `Worker ${statusLabel} · ${identity} · ${provider} · último latido ${heartbeat}.\n`;
+    return `Worker ${statusLabel} · ${identity} · ${provider} · ${contextLabel} · último latido ${heartbeat}.\n`;
 }
 
 export function parseAgentRuntimeRunOptions(argumentsList) {
@@ -2203,11 +2262,11 @@ function printHelp(stdout) {
     stdout.write('    Lista las identidades guardadas para esta carpeta, marca la predeterminada y la seleccionada, sin conectar ni mostrar secretos.\n');
     stdout.write('  mycompany agent me\n');
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
-    stdout.write('  mycompany agent work --once --provider=codex|claude|agy [--task=ID] [--timeout=SEGUNDOS]\n');
+    stdout.write('  mycompany agent work --once --provider=codex|claude|agy [--task=ID] [--timeout=SEGUNDOS] [--include-company-context] [--include-memory]\n');
     stdout.write('    Reclama una tarea abierta asignada a esta identidad, renueva su lease y registra su estado final. No pide confirmación interactiva: la invocación explícita inicia una ejecución sin red, limitada a los permisos locales de archivos. No publica informes ni delega subtareas automáticamente.\n');
-    stdout.write('    Si no se indica --task, procesa la tarea asignada más antigua que pueda reservar. Si falla la ejecución, deja caducar el lease para permitir reintento.\n');
-    stdout.write('  mycompany agent start --provider=codex|claude|agy\n');
-    stdout.write('    Inicia en segundo plano un worker local para el Agent seleccionado en esta carpeta.\n');
+    stdout.write('    Si no se indica --task, procesa la tarea asignada más antigua que pueda reservar. Contexto empresarial y memoria se envían solo si se piden y permiten los grants. Si falla la ejecución, deja caducar el lease para permitir reintento.\n');
+    stdout.write('  mycompany agent start --provider=codex|claude|agy [--include-company-context] [--include-memory]\n');
+    stdout.write('    Inicia en segundo plano un worker local para el Agent seleccionado en esta carpeta. El contexto y la memoria son optativos y respetan sus grants.\n');
     stdout.write('  mycompany agent status | stop\n');
     stdout.write('    Consulta el worker o solicita una parada limpia tras la tarea actual. No reclama otra tarea al parar.\n');
     stdout.write('  mycompany agent runtime\n');

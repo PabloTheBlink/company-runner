@@ -1,12 +1,62 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseAgentWorkResponse, runAgentWorkOnce, shouldApplyAgentTaskWrites } from '../src/agent-work.js';
+import { loadAgentTaskContext, parseAgentWorkResponse, runAgentWorkOnce, shouldApplyAgentTaskWrites } from '../src/agent-work.js';
 
 test('local Agent file writes are applied only for completed task outcomes', () => {
     assert.equal(shouldApplyAgentTaskWrites({ status: 'completed' }), true);
     assert.equal(shouldApplyAgentTaskWrites({ status: 'blocked' }), false);
     assert.equal(shouldApplyAgentTaskWrites({ status: 'open' }), false);
     assert.equal(shouldApplyAgentTaskWrites(null), false);
+});
+
+test('Agent task context loads only explicitly requested company data through scoped clients', async () => {
+    const requests = [];
+    const memory = Array.from({ length: 6 }, (_, index) => ({ id: index + 1, title: `Memoria ${index + 1}` }));
+    const identity = { permissions: [{ name: 'memory.read' }] };
+    const task = { title: 'Decidir próximos pasos', description: 'Revisar evidencia interna.' };
+    const agentClient = {
+        async searchMemory(options, directory) {
+            requests.push({ type: 'memory', options, directory });
+            return { memory };
+        },
+        async getCompanyContext(receivedIdentity, directory) {
+            requests.push({ type: 'company', identity: receivedIdentity, directory });
+            return { sections: { bets: { access: 'granted', items: [] } } };
+        },
+    };
+
+    const context = await loadAgentTaskContext({
+        identity,
+        task,
+        agentClient,
+        currentDirectory: '/company/root',
+        includeMemory: true,
+        includeCompanyContext: true,
+    });
+
+    assert.equal(context.memory.length, 5);
+    assert.equal(context.companyContext.sections.bets.access, 'granted');
+    assert.deepEqual(requests, [
+        {
+            type: 'memory',
+            options: { query: 'Decidir próximos pasos\nRevisar evidencia interna.' },
+            directory: '/company/root',
+        },
+        { type: 'company', identity, directory: '/company/root' },
+    ]);
+});
+
+test('Agent task memory context refuses to search without the memory.read grant', async () => {
+    let searchCount = 0;
+    await assert.rejects(loadAgentTaskContext({
+        identity: { permissions: [] },
+        task: { title: 'Revisar', description: null },
+        agentClient: { async searchMemory() { searchCount += 1; return { memory: [] }; } },
+        currentDirectory: '/company/root',
+        includeMemory: true,
+        includeCompanyContext: false,
+    }), /memory\.read/);
+    assert.equal(searchCount, 0);
 });
 
 test('parses only a bounded structured task result with an allowed final state', () => {

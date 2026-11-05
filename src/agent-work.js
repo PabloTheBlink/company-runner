@@ -5,6 +5,30 @@ const ACTIVE_STATUSES = ['open', 'in_progress'];
 export function shouldApplyAgentTaskWrites(outcome) {
     return outcome !== null && typeof outcome === 'object' && outcome.status === 'completed';
 }
+
+export async function loadAgentTaskContext({
+    identity,
+    task,
+    agentClient,
+    currentDirectory,
+    includeMemory = false,
+    includeCompanyContext = false,
+}) {
+    let memory = [];
+    if (includeMemory) {
+        if (!identity.permissions.some((permission) => permission?.name === 'memory.read')) {
+            throw new Error('El Agent necesita memory.read para incluir memoria en el worker.');
+        }
+        const query = [task.title, task.description].filter(Boolean).join('\n').slice(0, 2_000);
+        memory = (await agentClient.searchMemory({ query }, currentDirectory)).memory.slice(0, 5);
+    }
+
+    const companyContext = includeCompanyContext
+        ? await agentClient.getCompanyContext(identity, currentDirectory)
+        : null;
+
+    return { memory, companyContext };
+}
 const TOKEN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
 export function parseAgentWorkResponse(response) {
