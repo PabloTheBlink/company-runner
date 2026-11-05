@@ -1015,6 +1015,107 @@ export class AgentClient {
         return response.body;
     }
 
+    async claimTask(taskId, claimToken, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+        if (typeof claimToken !== 'string' || !AGENT_TOKEN_PATTERN.test(claimToken)) {
+            throw new Error('El token de lease debe contener 80 caracteres alfanuméricos.');
+        }
+
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(
+            `${serverUrl}/api/v1/agent/tasks/${taskId}/claim`,
+            { claim_token: claimToken },
+            configuration.api_token,
+        );
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401).');
+        if (response.status === 403) throw new Error('El Agent no puede reclamar tareas en este ámbito (HTTP 403).');
+        if (response.status === 404) throw new Error('La tarea no está asignada o disponible para este Agent.');
+        if (response.status === 409) throw new Error('La tarea ya tiene una reserva activa o el lease ha caducado.');
+        const claim = response.body.claim;
+        if (![200, 201].includes(response.status)
+            || claim === null || typeof claim !== 'object'
+            || claim.task_id !== taskId
+            || claim.agent_id !== configuration.agent_id
+            || !['in_progress', 'open'].includes(claim.task_status)
+            || claim.claim_token !== claimToken
+            || typeof claim.lease_expires_at !== 'string'
+            || !Number.isFinite(Date.parse(claim.lease_expires_at))
+            || typeof claim.replayed !== 'boolean') {
+            throw new Error('MyCompanies devolvió una reserva de tarea no válida.');
+        }
+
+        return claim;
+    }
+
+    async heartbeatTaskClaim(taskId, claimToken, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+        if (typeof claimToken !== 'string' || !AGENT_TOKEN_PATTERN.test(claimToken)) {
+            throw new Error('El token de lease debe contener 80 caracteres alfanuméricos.');
+        }
+
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(
+            `${serverUrl}/api/v1/agent/tasks/${taskId}/claim/heartbeat`,
+            { claim_token: claimToken },
+            configuration.api_token,
+        );
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401).');
+        if (response.status === 403) throw new Error('El Agent no puede renovar tareas en este ámbito (HTTP 403).');
+        if (response.status === 404) throw new Error('La reserva no pertenece al Agent seleccionado.');
+        if (response.status === 409) throw new Error('La reserva de tarea ya ha caducado o fue sustituida.');
+        const claim = response.body.claim;
+        if (response.status !== 200
+            || claim === null || typeof claim !== 'object'
+            || claim.task_id !== taskId
+            || typeof claim.lease_expires_at !== 'string'
+            || !Number.isFinite(Date.parse(claim.lease_expires_at))
+            || claim.renewed !== true) {
+            throw new Error('MyCompanies devolvió una renovación de reserva no válida.');
+        }
+
+        return claim;
+    }
+
+    async finishTaskClaim(taskId, claimToken, status, currentDirectory = process.cwd()) {
+        if (!Number.isSafeInteger(taskId) || taskId < 1) {
+            throw new Error('El ID de tarea debe ser un entero positivo.');
+        }
+        if (typeof claimToken !== 'string' || !AGENT_TOKEN_PATTERN.test(claimToken)) {
+            throw new Error('El token de lease debe contener 80 caracteres alfanuméricos.');
+        }
+        if (!['completed', 'blocked', 'open'].includes(status)) {
+            throw new Error('El estado final debe ser completed, blocked u open.');
+        }
+
+        const configuration = await this.configStore.loadAgentForDirectory(currentDirectory);
+        const serverUrl = normalizeServerUrl(configuration.server_url, configuration.allow_insecure_localhost);
+        const response = await this.postJson(
+            `${serverUrl}/api/v1/agent/tasks/${taskId}/claim/finish`,
+            { claim_token: claimToken, status },
+            configuration.api_token,
+        );
+        if (response.status === 401) throw new Error('La credencial Agent fue rechazada (HTTP 401).');
+        if (response.status === 403) throw new Error('El Agent no puede finalizar tareas en este ámbito (HTTP 403).');
+        if (response.status === 404) throw new Error('La reserva no pertenece al Agent seleccionado.');
+        if (response.status === 409) throw new Error('La reserva ha caducado, fue sustituida o la tarea ya finalizó de otra forma.');
+        const task = response.body.task;
+        if (response.status !== 200
+            || task === null || typeof task !== 'object'
+            || task.id !== taskId
+            || task.status !== status
+            || typeof response.body.replayed !== 'boolean') {
+            throw new Error('MyCompanies devolvió una finalización de tarea no válida.');
+        }
+
+        return response.body;
+    }
+
     async getTask(taskId, currentDirectory = process.cwd()) {
         if (!Number.isSafeInteger(taskId) || taskId < 1) {
             throw new Error('El ID de tarea debe ser un entero positivo.');

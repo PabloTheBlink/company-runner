@@ -222,6 +222,73 @@ test('agent task listing uses the Agent credential, status filter and cursor', a
     });
 });
 
+test('agent task lease claim, heartbeat and finish keep the lease token in authenticated API requests', async () => {
+    await withTemporaryDirectory(async (directory) => {
+        const companyRoot = path.join(directory, 'company');
+        await mkdir(companyRoot);
+        const configStore = new ConfigStore(path.join(directory, 'config', 'runner.json'));
+        const token = 'A'.repeat(80);
+        const claimToken = 'L'.repeat(80);
+        const requests = [];
+        const server = createServer(async (request, response) => {
+            assert.equal(request.headers.authorization, `Bearer ${token}`);
+            let body = '';
+            for await (const chunk of request) body += chunk;
+            requests.push({ method: request.method, url: request.url, body: JSON.parse(body) });
+            response.writeHead(request.url.endsWith('/finish') ? 200 : request.url.endsWith('/heartbeat') ? 200 : 201, { 'content-type': 'application/json' });
+            if (request.url.endsWith('/finish')) {
+                response.end(JSON.stringify({ task: { id: 26, status: 'completed' }, replayed: false }));
+                return;
+            }
+            if (request.url.endsWith('/heartbeat')) {
+                response.end(JSON.stringify({ claim: { task_id: 26, lease_expires_at: '2026-11-05T12:02:00+00:00', renewed: true } }));
+                return;
+            }
+            response.end(JSON.stringify({ claim: {
+                task_id: 26,
+                agent_id: 12,
+                task_status: 'in_progress',
+                claim_token: claimToken,
+                lease_expires_at: '2026-11-05T12:02:00+00:00',
+                replayed: false,
+            } }));
+        });
+        const serverUrl = await listen(server);
+        await configStore.saveAgent({
+            server_url: serverUrl,
+            agent_id: 12,
+            agent_name: 'Vera',
+            company_id: 4,
+            company_name: 'Empresa',
+            company_root_path: companyRoot,
+            allow_insecure_localhost: true,
+            api_token: token,
+        });
+
+        try {
+            const client = new AgentClient(configStore);
+            const claim = await client.claimTask(26, claimToken, companyRoot);
+            const heartbeat = await client.heartbeatTaskClaim(26, claimToken, companyRoot);
+            const finished = await client.finishTaskClaim(26, claimToken, 'completed', companyRoot);
+
+            assert.equal(claim.claim_token, claimToken);
+            assert.equal(heartbeat.renewed, true);
+            assert.equal(finished.task.status, 'completed');
+            assert.deepEqual(requests, [
+                { method: 'POST', url: '/api/v1/agent/tasks/26/claim', body: { claim_token: claimToken } },
+                { method: 'POST', url: '/api/v1/agent/tasks/26/claim/heartbeat', body: { claim_token: claimToken } },
+                { method: 'POST', url: '/api/v1/agent/tasks/26/claim/finish', body: { claim_token: claimToken, status: 'completed' } },
+            ]);
+            await assert.rejects(client.claimTask(0, claimToken, companyRoot), /ID de tarea/);
+            await assert.rejects(client.claimTask(26, 'short', companyRoot), /token/);
+            await assert.rejects(client.finishTaskClaim(26, claimToken, 'cancelled', companyRoot), /estado final/);
+        } finally {
+            server.close();
+            await once(server, 'close');
+        }
+    });
+});
+
 test('agent task detail retrieves only the requested task and accepts a company-level task without Workspace', async () => {
     await withTemporaryDirectory(async (directory) => {
         const companyRoot = path.join(directory, 'company');
