@@ -77,6 +77,9 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         publishPath: null,
         allowNetwork: false,
         includeMemory: false,
+        memoryQuery: null,
+        memoryTopicId: null,
+        memoryWorkspaceId: null,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--timeout=600', '--provider=agy']), {
         taskId: 42,
@@ -85,6 +88,9 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         publishPath: null,
         allowNetwork: false,
         includeMemory: false,
+        memoryQuery: null,
+        memoryTopicId: null,
+        memoryWorkspaceId: null,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=reports/daily.md']), {
         taskId: 42,
@@ -93,6 +99,9 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         publishPath: 'reports/daily.md',
         allowNetwork: false,
         includeMemory: false,
+        memoryQuery: null,
+        memoryTopicId: null,
+        memoryWorkspaceId: null,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=codex']), {
         taskId: 42,
@@ -101,10 +110,30 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         publishPath: null,
         allowNetwork: false,
         includeMemory: false,
+        memoryQuery: null,
+        memoryTopicId: null,
+        memoryWorkspaceId: null,
     });
     assert.equal(parseAgentRuntimeRunOptions(['42', '--provider=codex', '--include-memory']).includeMemory, true);
+    assert.deepEqual(parseAgentRuntimeRunOptions([
+        '42', '--provider=codex', '--include-memory', '--memory-query=systemctl approval sandbox', '--memory-topic=9', '--memory-workspace=4',
+    ]), {
+        taskId: 42,
+        provider: 'codex',
+        timeoutSeconds: 300,
+        publishPath: null,
+        allowNetwork: false,
+        includeMemory: true,
+        memoryQuery: 'systemctl approval sandbox',
+        memoryTopicId: 9,
+        memoryWorkspaceId: 4,
+    });
     assert.equal(parseAgentRuntimeRunOptions(['42', '--provider=codex', '--allow-network']).allowNetwork, true);
     assert.throws(() => parseAgentRuntimeRunOptions(['0', '--provider=agy']), /positivo/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=codex', '--memory-query=tema']), /requieren --include-memory/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=codex', '--include-memory', '--memory-query= ']), /entre 2 y 2000/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=codex', '--include-memory', '--memory-topic=0']), /entero positivo/);
+    assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=codex', '--include-memory', '--memory-topic=9', '--memory-topic=10']), /desconocida o repetida/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=other']), /Opción desconocida/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=9']), /entre 10 y 900/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=agy', '--timeout=901']), /entre 10 y 900/);
@@ -420,9 +449,10 @@ test('agent runtime includes memory only when requested and within the Agent rea
             return;
         }
         if (request.url.startsWith('/api/v1/agent/memory/search?')) {
-            const query = new URL(request.url, 'http://localhost').searchParams.get('q');
-            assert.match(query, /Investigar oportunidades/);
-            assert.match(query, /demanda en pequeñas empresas/);
+            const search = new URL(request.url, 'http://localhost').searchParams;
+            assert.equal(search.get('q'), 'systemctl approval sandbox');
+            assert.equal(search.get('topic_id'), '9');
+            assert.equal(search.get('workspace_id'), '4');
             response.end(JSON.stringify({ memory: [memoryNode] }));
             return;
         }
@@ -462,7 +492,7 @@ test('agent runtime includes memory only when requested and within the Agent rea
 
     try {
         assert.equal(await run(
-            ['agent', 'runtime', 'run', '42', '--provider=codex', '--include-memory'],
+            ['agent', 'runtime', 'run', '42', '--provider=codex', '--include-memory', '--memory-query=systemctl approval sandbox', '--memory-topic=9', '--memory-workspace=4'],
             { stdout: output, stderr: output },
             companyRoot,
             configStore,
@@ -484,11 +514,13 @@ test('agent runtime includes memory only when requested and within the Agent rea
         assert.deepEqual(requests, [
             '/api/v1/agent/me',
             '/api/v1/agent/tasks/42',
-            `/api/v1/agent/memory/search?q=${encodeURIComponent('Investigar oportunidades\nAnalizar demanda en pequeñas empresas.').replaceAll('%20', '+')}`,
+            '/api/v1/agent/memory/search?q=systemctl+approval+sandbox&topic_id=9&workspace_id=4',
             '/api/v1/agent/tasks/42',
         ]);
         assert.equal(confirmations[0].includeMemory, true);
         assert.equal(confirmations[0].memoryCount, 1);
+        assert.equal(confirmations[0].memoryTopicId, 9);
+        assert.equal(confirmations[0].memoryWorkspaceId, 4);
         assert.equal(runtimeCalls.length, 1);
         assert.match(output.value, /Investigación preparada/);
     } finally {

@@ -69,6 +69,8 @@ The first upload attempts as `.md` and `.txt` returned HTTP 422 because PHP coul
 
 The CLI now provides `mycompany agent runtime run TASK_ID --provider=codex` and the existing `--provider=agy` path for manually confirmed task execution. Codex runs with an ephemeral `codex exec` session, `workspace-write` sandbox and network disabled; AgY applies its own sandbox. The CLI revalidates task assignment before applying writes, mediates exact local file grants, and can publish one selected artifact with `--publish`. Claude Code is still detected/preflighted only. No automatic polling, scheduling, task completion, or central execution history is created by this runtime. The earlier Devetty report remains a manual Codex run, not an execution by Marta. The host's private PHP upload temporary directory must remain available when starting the local Laravel server; otherwise uploads can fail when `/tmp` reaches the user's quota.
 
+For a memory-enabled run, `--include-memory` defaults to a search made from the task title and description. Use `--memory-query="TEXT"` to replace that search text, `--memory-topic=ID` to narrow it to a topic, and `--memory-workspace=ID` to narrow it to a workspace. These options require `--include-memory`; filters can only reduce results because the server applies the Agent's current company grants. The runtime still sends at most five results after the existing typed confirmation. For example: `mycompany agent runtime run 136 --provider=codex --include-memory --memory-query="systemctl approval sandbox" --memory-topic=7`. The query is sent to MyCompanies' memory search API and is not itself inserted in the model prompt.
+
 Later, run commands from that company root or any folder inside it:
 
 ```sh

@@ -168,8 +168,12 @@ export async function run(
                     if (!identity.permissions.some((permission) => permission?.name === 'memory.read')) {
                         throw new Error('El Agent necesita memory.read para incluir memoria en el runtime.');
                     }
-                    const query = [task.title, task.description].filter(Boolean).join('\n').slice(0, 2000);
-                    memory = (await agentClient.searchMemory({ query }, currentDirectory)).memory.slice(0, 5);
+                    const query = options.memoryQuery ?? [task.title, task.description].filter(Boolean).join('\n').slice(0, 2000);
+                    memory = (await agentClient.searchMemory({
+                        query,
+                        topicId: options.memoryTopicId,
+                        workspaceId: options.memoryWorkspaceId,
+                    }, currentDirectory)).memory.slice(0, 5);
                 }
                 const companyGrants = await configStore.listAgentFileAccessForDirectory(currentDirectory, plan.agentId);
                 if (options.publishPath !== null) {
@@ -198,6 +202,8 @@ export async function run(
                     allowNetwork: options.allowNetwork,
                     includeMemory: options.includeMemory,
                     memoryCount: memory.length,
+                    memoryTopicId: options.memoryTopicId,
+                    memoryWorkspaceId: options.memoryWorkspaceId,
                 }, streams);
                 if (!confirmed) throw new Error('El agente no se inició porque faltó la confirmación escrita.');
 
@@ -879,8 +885,9 @@ export function parseAgentRuntimePlanOptions(argumentsList) {
 }
 
 export function parseAgentRuntimeRunOptions(argumentsList) {
-    if (argumentsList.length < 2 || argumentsList.length > 6) {
-        throw new Error('Uso: mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-memory].');
+    const usage = 'Uso: mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]].';
+    if (argumentsList.length < 2 || argumentsList.length > 9) {
+        throw new Error(usage);
     }
 
     const taskId = parseTaskId(argumentsList[0]);
@@ -890,16 +897,38 @@ export function parseAgentRuntimeRunOptions(argumentsList) {
     let publishPath = null;
     let allowNetwork = false;
     let includeMemory = false;
+    let memoryQuery = null;
+    let memoryTopicId = null;
+    let memoryWorkspaceId = null;
     for (const argument of argumentsList.slice(1)) {
         const providerMatch = /^--provider=(agy|codex|claude)$/.exec(argument);
         const timeoutMatch = /^--timeout=(\d+)$/.exec(argument);
         const publishMatch = /^--publish=(.+)$/.exec(argument);
+        const memoryQueryMatch = /^--memory-query=(.*)$/.exec(argument);
+        const memoryTopicMatch = /^--memory-topic=(\d+)$/.exec(argument);
+        const memoryWorkspaceMatch = /^--memory-workspace=(\d+)$/.exec(argument);
         if (argument === '--allow-network' && !allowNetwork) {
             allowNetwork = true;
             continue;
         }
         if (argument === '--include-memory' && !includeMemory) {
             includeMemory = true;
+            continue;
+        }
+        if (memoryQueryMatch !== null && memoryQuery === null) {
+            const value = memoryQueryMatch[1].trim();
+            if (value.length < 2 || value.length > 2000) throw new Error('La consulta de memoria debe tener entre 2 y 2000 caracteres.');
+            memoryQuery = value;
+            continue;
+        }
+        if (memoryTopicMatch !== null && memoryTopicId === null) {
+            memoryTopicId = Number(memoryTopicMatch[1]);
+            if (!Number.isSafeInteger(memoryTopicId) || memoryTopicId < 1) throw new Error('El ID del tema debe ser un entero positivo.');
+            continue;
+        }
+        if (memoryWorkspaceMatch !== null && memoryWorkspaceId === null) {
+            memoryWorkspaceId = Number(memoryWorkspaceMatch[1]);
+            if (!Number.isSafeInteger(memoryWorkspaceId) || memoryWorkspaceId < 1) throw new Error('El ID del Workspace debe ser un entero positivo.');
             continue;
         }
         if (providerMatch !== null && provider === null) {
@@ -915,7 +944,7 @@ export function parseAgentRuntimeRunOptions(argumentsList) {
             continue;
         }
         if (timeoutMatch !== null && timeoutWasProvided) {
-            throw new Error('Uso: mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-memory].');
+            throw new Error(usage);
         }
         if (publishMatch !== null && publishPath === null) {
             publishPath = normalizeLocalAgentPath(publishMatch[1]);
@@ -929,8 +958,11 @@ export function parseAgentRuntimeRunOptions(argumentsList) {
     }
     if (provider === null) throw new Error('Indica --provider=codex|agy para ejecutar la tarea.');
     if (allowNetwork && provider !== 'codex') throw new Error('--allow-network solo está disponible para Codex.');
+    if (!includeMemory && (memoryQuery !== null || memoryTopicId !== null || memoryWorkspaceId !== null)) {
+        throw new Error('Las opciones --memory-query, --memory-topic y --memory-workspace requieren --include-memory.');
+    }
 
-    return { taskId, provider, timeoutSeconds, publishPath, allowNetwork, includeMemory };
+    return { taskId, provider, timeoutSeconds, publishPath, allowNetwork, includeMemory, memoryQuery, memoryTopicId, memoryWorkspaceId };
 }
 
 function hasAgentCompanyPermission(identity, permissionName) {
@@ -1012,6 +1044,13 @@ async function confirmAgentRuntimeExecution(request, streams) {
         : 'La red estará deshabilitada durante esta ejecución.\n');
     if (request.includeMemory) {
         streams.stderr.write(`Se incluirán ${request.memoryCount} entradas accesibles de memoria en el contexto enviado a ${providerName}.\n`);
+        if (request.memoryTopicId !== null || request.memoryWorkspaceId !== null) {
+            const scope = [
+                request.memoryTopicId === null ? null : `tema #${request.memoryTopicId}`,
+                request.memoryWorkspaceId === null ? null : `Workspace #${request.memoryWorkspaceId}`,
+            ].filter(Boolean).join(' · ');
+            streams.stderr.write(`La búsqueda se limitará además a ${scope}; MyCompanies vuelve a aplicar los permisos vigentes.\n`);
+        }
     }
     streams.stderr.write(`Confirma escribiendo exactamente ${confirmation}:\n`);
     for (const filePath of request.fileSummary.read) streams.stderr.write(`  read · ${safeTerminalText(filePath)}\n`);
@@ -1665,10 +1704,11 @@ function printHelp(stdout) {
     stdout.write('    Detecta Codex, Claude Code y Antigravity CLI (agy) en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
     stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude|agy\n');
     stdout.write('    Comprueba identidad, acceso a tarea y asignación del Agent. Solo muestra un plan; no inicia un modelo.\n');
-    stdout.write('  mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-memory]\n');
+    stdout.write('  mycompany agent runtime run TASK_ID --provider=codex|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]]\n');
     stdout.write('    Ejecuta una tarea asignada con Codex o AgY en Linux, tras confirmación escrita; envía la descripción y archivos read al proveedor.\n');
     stdout.write('    Usa el sandbox del proveedor, aplica solo rutas con permiso write y elimina el staging al terminar. La red está deshabilitada por defecto.\n');
     stdout.write('    --allow-network habilita red abierta solo para Codex y exige confirmación explícita; no restringe dominios. Claude sigue en preflight.\n');
+    stdout.write('    --include-memory añade hasta cinco recuerdos autorizados; query sustituye el texto derivado de la tarea y topic/workspace estrechan el ámbito.\n');
     stdout.write('    --publish publica un único archivo .md, .txt o .pdf autorizado localmente y con artifacts.publish; la confirmación indica qué archivo se envía.\n');
     stdout.write('  mycompany agent runtime files list | grant RUTA --operation=read|write | revoke RUTA --operation=read|write\n');
     stdout.write('    Administra permisos de archivos locales para la identidad Agent seleccionada. grant y revoke requieren confirmación escrita en un terminal interactivo.\n');
