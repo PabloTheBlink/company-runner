@@ -13,17 +13,8 @@ export const DEVTO_STATS_TOTALS_CAPABILITY = Object.freeze({
     maxOutputBytes: 1_048_576,
 });
 
-export async function listLocalCapabilities(companyRoot) {
-    if (await resolveCompanyRoot(companyRoot) === null) {
-        return [];
-    }
-
-    return [{
-        name: DEVTO_STATS_TOTALS_CAPABILITY.name,
-        version: DEVTO_STATS_TOTALS_CAPABILITY.version,
-        access: 'read only',
-        requirement: 'Python 3',
-    }];
+export async function isDevtoStatsInstalled(companyRoot) {
+    return await resolveCompanyRoot(companyRoot) !== null;
 }
 
 export async function runDevtoStatsTotals({ companyRoot, timeoutMs = DEVTO_STATS_TOTALS_CAPABILITY.maxRuntimeMs, execFileImplementation = execFile } = {}) {

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { ConfigStore } from './config.js';
 import { AgentClient, formatAssignee, RunnerClient } from './client.js';
-import { listLocalCapabilities } from './capabilities/devto-stats-totals.js';
+import { listLocalCapabilities } from './capabilities/index.js';
 import { initializeCompanyRoot } from './company-kit.js';
 import { applyLocalAgentFileWrites, stageLocalAgentFiles } from './local-agent-files.js';
 import { syncAgentProfileInstructions } from './agent-profile-sync.js';

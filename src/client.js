@@ -1,6 +1,7 @@
 import { lstat, open, realpath, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve, sep } from 'node:path';
-import { DEVTO_STATS_TOTALS_CAPABILITY, listLocalCapabilities, runDevtoStatsTotals } from './capabilities/devto-stats-totals.js';
+import { DEVTO_STATS_TOTALS_CAPABILITY, runDevtoStatsTotals } from './capabilities/devto-stats-totals.js';
+import { listLocalCapabilities } from './capabilities/index.js';
 const API_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
 const ENROLLMENT_CODE_PATTERN = /^[A-Za-z0-9]{64}$/;
 const AGENT_TOKEN_PATTERN = /^[A-Za-z0-9]{80}$/;
