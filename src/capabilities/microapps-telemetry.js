@@ -15,14 +15,15 @@ export const MICROAPPS_TELEMETRY_CAPABILITY = Object.freeze({
     maxOutputBytes: 16_384,
     agentTool: Object.freeze({
         permission: 'automations.execute',
-        description: 'Consulta métricas agregadas de telemetría local de una Microapp (últimos 1–30 días).',
+        description: 'Consulta métricas agregadas de telemetría local o de producción de una Microapp (últimos 1–30 días).',
         parameters: Object.freeze({
             type: 'object',
             properties: {
                 app: Object.freeze({ type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }),
                 days: Object.freeze({ type: 'integer', minimum: 1, maximum: 30 }),
+                environment: Object.freeze({ type: 'string', enum: ['local', 'production'] }),
             },
-            required: Object.freeze(['app', 'days']),
+            required: Object.freeze(['app', 'days', 'environment']),
             additionalProperties: false,
         }),
         validateParameters: isValidParameters,
@@ -87,12 +88,13 @@ function isValidParameters(parameters) {
     return parameters !== null
         && typeof parameters === 'object'
         && !Array.isArray(parameters)
-        && Object.keys(parameters).sort().join(',') === 'app,days'
+        && Object.keys(parameters).sort().join(',') === 'app,days,environment'
         && typeof parameters.app === 'string'
         && APP_PATTERN.test(parameters.app)
         && Number.isInteger(parameters.days)
         && parameters.days >= 1
-        && parameters.days <= 30;
+        && parameters.days <= 30
+        && ['local', 'production'].includes(parameters.environment);
 }
 
 function isValidResult(result, parameters) {
@@ -100,10 +102,11 @@ function isValidResult(result, parameters) {
         && typeof result === 'object'
         && !Array.isArray(result)
         && Object.keys(result).sort().join(',') === [
-            'app', 'javascript_errors', 'page_views', 'period_days', 'requests', 'resolved_errors', 'server_errors', 'sessions', 'source',
+            'app', 'environment', 'javascript_errors', 'page_views', 'period_days', 'requests', 'resolved_errors', 'server_errors', 'sessions', 'source',
         ].sort().join(',')
         && result.source === 'Devetty app telemetry'
         && result.app === parameters.app
+        && result.environment === parameters.environment
         && result.period_days === parameters.days
         && METRIC_FIELDS.every((field) => Number.isSafeInteger(result[field]) && result[field] >= 0);
 }
@@ -113,11 +116,12 @@ export function isValidMicroappsTelemetryResult(result) {
         && typeof result === 'object'
         && !Array.isArray(result)
         && Object.keys(result).sort().join(',') === [
-            'app', 'javascript_errors', 'page_views', 'period_days', 'requests', 'resolved_errors', 'server_errors', 'sessions', 'source',
+            'app', 'environment', 'javascript_errors', 'page_views', 'period_days', 'requests', 'resolved_errors', 'server_errors', 'sessions', 'source',
         ].sort().join(',')
         && result.source === 'Devetty app telemetry'
         && typeof result.app === 'string'
         && APP_PATTERN.test(result.app)
+        && ['local', 'production'].includes(result.environment)
         && Number.isInteger(result.period_days)
         && result.period_days >= 1
         && result.period_days <= 30
@@ -144,7 +148,7 @@ function executeFixedScript(execFileImplementation, companyRoot, parameters, tim
         try {
             execFileImplementation(
                 'python3',
-                [SCRIPT_PATH, '--app', parameters.app, '--days', String(parameters.days)],
+                [SCRIPT_PATH, '--app', parameters.app, '--days', String(parameters.days), '--environment', parameters.environment],
                 {
                     cwd: companyRoot,
                     env: { PATH: process.env.PATH ?? '', PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },

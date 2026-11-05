@@ -23,6 +23,7 @@ async function withCompanyWorkspace(runTest) {
 const validOutput = JSON.stringify({
     source: 'Devetty app telemetry',
     app: 'ugc-deal-tracker',
+    environment: 'local',
     period_days: 7,
     page_views: 102,
     sessions: 67,
@@ -37,7 +38,7 @@ test('Microapps telemetry capability invokes only the fixed local read operation
         let invocation;
         const result = await runMicroappsTelemetry({
             companyRoot,
-            parameters: { app: 'ugc-deal-tracker', days: 7 },
+            parameters: { app: 'ugc-deal-tracker', days: 7, environment: 'local' },
             execFileImplementation(executable, args, options, callback) {
                 invocation = { executable, args, options };
                 callback(null, validOutput, 'progress output is discarded');
@@ -46,7 +47,7 @@ test('Microapps telemetry capability invokes only the fixed local read operation
 
         assert.deepEqual(result, JSON.parse(validOutput));
         assert.equal(invocation.executable, 'python3');
-        assert.deepEqual(invocation.args, ['automations/microapps/inspect_telemetry.py', '--app', 'ugc-deal-tracker', '--days', '7']);
+        assert.deepEqual(invocation.args, ['automations/microapps/inspect_telemetry.py', '--app', 'ugc-deal-tracker', '--days', '7', '--environment', 'local']);
         assert.equal(invocation.options.cwd, companyRoot);
         assert.equal(invocation.options.shell, false);
         assert.equal(invocation.options.timeout, MICROAPPS_TELEMETRY_CAPABILITY.maxRuntimeMs);
@@ -59,6 +60,7 @@ test('Microapps telemetry capability summarizes only aggregate fields for the Ag
     assert.deepEqual(MICROAPPS_TELEMETRY_CAPABILITY.agentTool.summarize(JSON.parse(validOutput)), {
         source: 'Devetty app telemetry',
         app: 'ugc-deal-tracker',
+        environment: 'local',
         period_days: 7,
         page_views: 102,
         sessions: 67,
@@ -100,9 +102,21 @@ test('Microapps telemetry capability rejects invalid input, unsafe output, overs
         }), /parámetros/);
         assert.equal(invocationCount, 0);
 
+        let productionInvocation;
+        const productionResult = await runMicroappsTelemetry({
+            companyRoot,
+            parameters: { app: 'ugc-deal-tracker', days: 7, environment: 'production' },
+            execFileImplementation(_executable, args, _options, callback) {
+                productionInvocation = args;
+                callback(null, JSON.stringify({ ...JSON.parse(validOutput), environment: 'production' }), '');
+            },
+        });
+        assert.equal(productionResult.environment, 'production');
+        assert.deepEqual(productionInvocation.slice(-2), ['--environment', 'production']);
+
         await assert.rejects(runMicroappsTelemetry({
             companyRoot,
-            parameters: { app: 'ugc-deal-tracker', days: 7 },
+            parameters: { app: 'ugc-deal-tracker', days: 7, environment: 'local' },
             execFileImplementation(_executable, _args, _options, callback) {
                 callback(null, JSON.stringify({ ...JSON.parse(validOutput), recent_errors: [{ message: 'private' }] }), '');
             },
@@ -110,7 +124,7 @@ test('Microapps telemetry capability rejects invalid input, unsafe output, overs
 
         await assert.rejects(runMicroappsTelemetry({
             companyRoot,
-            parameters: { app: 'ugc-deal-tracker', days: 7 },
+            parameters: { app: 'ugc-deal-tracker', days: 7, environment: 'local' },
             execFileImplementation(_executable, _args, _options, callback) {
                 callback(new Error('secret process failure'), '', 'sensitive stderr');
             },
