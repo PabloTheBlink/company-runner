@@ -206,6 +206,19 @@ mycompany agent runtime run 42 --provider=agy --publish=reports/daily.md
 
 The selected Agent must have the server permission `artifacts.publish`, and the same exact path must have a local `write` grant. The file must be `.md`, `.txt`, or `.pdf`; the CLI includes it in the written confirmation and publishes it only after the local write checks succeed. Publication uses the existing authenticated artifact API. If upload fails, local authorized changes remain in the company folder and the CLI reports the upload error.
 
+### Delegate a task to direct reports
+
+```sh
+mycompany agent delegate TASK_ID --provider=codex|claude|agy
+mycompany agent delegate TASK_ID --provider=codex|claude|agy --apply
+```
+
+The default mode asks the selected provider for a strict JSON plan of up to three subtasks and prints the validated plan without creating records. The parent task must be active, assigned to the selected Agent, and belong to a Workspace. The Agent needs `agents.permissions.manage`, plus `tasks.manage` and `tasks.assign` for that Workspace. Each proposed assignee must be an active direct report with effective `tasks.read` for the same Workspace. Provider network access is disabled, and the provider receives no API credential or tools for server actions.
+
+`--apply` starts a visible Agent runtime session, rechecks the parent task and current direct reports after provider work, then creates and assigns each task through the authenticated API. MyCompanies rechecks grants and scope. Creation uses a deterministic idempotency key per parent and action position, so an exact retry reuses the same task. If a later action fails, earlier tasks may already exist; rerun the unchanged plan to resume safely. The command does not execute child tasks, close the parent, or poll for more work. Schedule or invoke it only for a task deliberately assigned to the selected Agent.
+
+An end-to-end local pilot exercised a CEO → manager → specialist hierarchy with real Codex runs and the MyCompanies API. It verified nested task creation, workspace-scoped assignment, runtime sessions, completion, and private artifact publication. The pilot proves scoped hierarchical task creation and assignment; it does not prove automatic task pickup or a continuously running agent workforce. A scheduler/worker cycle, concurrency-safe task claiming, completion policy, and failure recovery remain future work.
+
 ## Credential storage
 
 Runner and Agent credentials are kept as separate JSON files under the user's private configuration directory. Agent credentials are selected by their associated company root and cannot be used as Runner credentials. The paths below show Runner storage; Agent files use the sibling `agents/` directory:

@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentDelegationOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 import { listLocalAgentRuntimes } from '../src/runtime.js';
@@ -84,6 +84,15 @@ test('agent runtime plan requires a positive task ID and explicit supported prov
     assert.throws(() => parseAgentRuntimePlanOptions(['0', '--provider=codex']), /positivo/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=other']), /proveedor/);
     assert.throws(() => parseAgentRuntimePlanOptions(['42', '--provider=codex', '--provider=claude']), /Uso:/);
+});
+
+test('agent delegation options require one provider and allow explicit apply only', () => {
+    assert.deepEqual(parseAgentDelegationOptions(['140', '--provider=codex']), { taskId: 140, provider: 'codex', apply: false });
+    assert.deepEqual(parseAgentDelegationOptions(['140', '--provider=codex', '--apply']), { taskId: 140, provider: 'codex', apply: true });
+    assert.throws(() => parseAgentDelegationOptions(['140']), /provider/);
+    assert.throws(() => parseAgentDelegationOptions(['140', '--provider=claude', '--apply', '--apply']), /Uso:/);
+    assert.throws(() => parseAgentDelegationOptions(['140', '--provider=unknown']), /proveedor/);
+    assert.throws(() => parseAgentDelegationOptions(['140', '--provider=codex', '--network']), /Uso/);
 });
 
 test('agent runtime run requires a valid task, supported provider, and bounded timeout', () => {
@@ -302,6 +311,168 @@ test('agent runtime plan checks the selected Agent and assigned task without sta
         assert.match(stdout.value, /Tarea: #42 · Investigar canales \(en curso\)/);
         assert.match(stdout.value, /Proveedor: Codex/);
         assert.doesNotMatch(stdout.value, /No debe copiarse|api_token|Bearer/);
+    } finally {
+        server.close();
+        await once(server, 'close');
+    }
+});
+
+test('agent delegation dry run validates direct reports and creates no server-side records', async () => {
+    const token = 'D'.repeat(80);
+    const requests = [];
+    const server = createServer((request, response) => {
+        requests.push(request.url);
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 25, uuid: '6b7a2b59-1e1b-4e42-b658-ffb2212f3f56', name: 'Vera', role: 'CEO' },
+                company: { id: 1, name: 'Devetty' },
+                permissions: [
+                    { name: 'agents.permissions.manage', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'tasks.manage', scope: 'workspace', workspace_id: 4, workspace_name: 'Licitaciones Alerta' },
+                    { name: 'tasks.assign', scope: 'workspace', workspace_id: 4, workspace_name: 'Licitaciones Alerta' },
+                ],
+            }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/140') {
+            response.end(JSON.stringify({ task: {
+                id: 140, title: 'Analizar oportunidad', description: 'Dividir análisis en subtareas.', status: 'in_progress',
+                priority: 'normal', due_date: null, assignee: { type: 'agent', id: 25, name: 'Vera' },
+                workspace: { id: 4, name: 'Licitaciones Alerta' },
+            } }));
+            return;
+        }
+        assert.equal(request.url, '/api/v1/agent/agents');
+        response.end(JSON.stringify({
+            agents: [{
+                id: 6, uuid: '6b7a2b59-1e1b-4e42-b658-ffb2212f3f56', name: 'Gala', role: 'Marketing', status: 'active',
+                permissions: [{ name: 'tasks.read', scope: 'workspace:4' }],
+            }],
+            has_more: false,
+            next_after: null,
+        }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const configStore = {
+        localAgentFilePolicyPath: '/tmp/mycompany-delegation-policy.json',
+        async loadAgentForDirectory(directory) {
+            assert.equal(directory, '/company');
+            return { server_url: `http://127.0.0.1:${server.address().port}`, agent_id: 25, company_id: 1, allow_insecure_localhost: true, api_token: token };
+        },
+    };
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+    const runtimeRunner = async ({ prompt, cwd, allowNetwork }) => {
+        assert.match(prompt, /Analizar oportunidad/);
+        assert.match(prompt, /workspace:4/);
+        assert.equal(allowNetwork, false);
+        assert.ok((await stat(cwd)).isDirectory());
+        return { response: JSON.stringify({ tasks: [{ title: 'Revisar datos', description: 'Comprobar evidencia disponible.', assignee_agent_id: 6, priority: 'normal' }] }) };
+    };
+
+    try {
+        assert.equal(await run(
+            ['agent', 'delegate', '140', '--provider=codex'],
+            { stdout }, '/company', configStore,
+            async () => [{ provider: 'codex', command: 'codex' }],
+            undefined, runtimeRunner,
+        ), 0);
+        assert.deepEqual(requests, ['/api/v1/agent/me', '/api/v1/agent/tasks/140', '/api/v1/agent/agents']);
+        assert.match(stdout.value, /Simulación: no se han creado ni asignado tareas/);
+        assert.match(stdout.value, /Revisar datos → Gala/);
+    } finally {
+        server.close();
+        await once(server, 'close');
+    }
+});
+
+test('agent delegation apply rechecks the parent and direct report before creating and assigning subtasks', async () => {
+    const token = 'A'.repeat(80);
+    const requests = [];
+    const parent = {
+        id: 140, title: 'Analizar oportunidad', description: 'Dividir análisis en subtareas.', status: 'in_progress',
+        priority: 'normal', due_date: null, assignee: { type: 'agent', id: 25, name: 'Vera' },
+        workspace: { id: 4, name: 'Licitaciones Alerta' },
+    };
+    const child = {
+        id: 501, title: 'Revisar datos', description: 'Subtarea de MyCompanies #140.\n\nComprobar evidencia disponible.',
+        status: 'open', priority: 'normal', due_date: null, workspace: { id: 4, name: 'Licitaciones Alerta' },
+    };
+    const session = {
+        id: 81, agent_id: 25, task_id: 140, provider: 'codex', status: 'running', phase: 'starting',
+        started_at: '2026-11-05T10:00:00Z', last_reported_at: '2026-11-05T10:00:00Z', finished_at: null,
+    };
+    const server = createServer(async (request, response) => {
+        let rawBody = '';
+        for await (const chunk of request) rawBody += chunk;
+        const body = rawBody === '' ? null : JSON.parse(rawBody);
+        requests.push({ method: request.method, url: request.url, body, key: request.headers['idempotency-key'] });
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(request.method === 'POST' && request.url === '/api/v1/agent/runtime-sessions'
+            ? 201
+            : request.method === 'POST' && request.url === '/api/v1/agent/tasks' ? 201 : 200,
+        { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 25, uuid: '6b7a2b59-1e1b-4e42-b658-ffb2212f3f56', name: 'Vera', role: 'CEO' },
+                company: { id: 1, name: 'Devetty' },
+                permissions: [
+                    { name: 'agents.permissions.manage', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'tasks.manage', scope: 'workspace', workspace_id: 4, workspace_name: 'Licitaciones Alerta' },
+                    { name: 'tasks.assign', scope: 'workspace', workspace_id: 4, workspace_name: 'Licitaciones Alerta' },
+                ],
+            }));
+        } else if (request.url === '/api/v1/agent/tasks/140') {
+            response.end(JSON.stringify({ task: parent }));
+        } else if (request.url === '/api/v1/agent/agents') {
+            response.end(JSON.stringify({ agents: [{
+                id: 6, uuid: '6b7a2b59-1e1b-4e42-b658-ffb2212f3f56', name: 'Gala', role: 'Marketing', status: 'active',
+                permissions: [{ name: 'tasks.read', scope: 'workspace:4' }],
+            }], has_more: false, next_after: null }));
+        } else if (request.url === '/api/v1/agent/runtime-sessions' && request.method === 'POST') {
+            response.end(JSON.stringify({ session }));
+        } else if (request.url === '/api/v1/agent/tasks' && request.method === 'POST') {
+            response.end(JSON.stringify({ task: child, replayed: false }));
+        } else if (request.url === '/api/v1/agent/tasks/501/assignee') {
+            response.end(JSON.stringify({ task: { ...child, assignee: { type: 'agent', id: 6, name: 'Gala' } } }));
+        } else if (request.url === '/api/v1/agent/runtime-sessions/81') {
+            response.end(JSON.stringify({ session: { ...session, status: body.status, phase: body.phase } }));
+        } else {
+            response.writeHead(404);
+            response.end('{}');
+        }
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const configStore = {
+        localAgentFilePolicyPath: '/tmp/mycompany-delegation-policy.json',
+        async loadAgentForDirectory() {
+            return { server_url: `http://127.0.0.1:${server.address().port}`, agent_id: 25, company_id: 1, allow_insecure_localhost: true, api_token: token };
+        },
+    };
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+
+    try {
+        assert.equal(await run(
+            ['agent', 'delegate', '140', '--provider=codex', '--apply'],
+            { stdout }, '/company', configStore,
+            async () => [{ provider: 'codex', command: 'codex' }],
+            undefined,
+            async () => ({ response: JSON.stringify({ tasks: [{ title: 'Revisar datos', description: 'Comprobar evidencia disponible.', assignee_agent_id: 6, priority: 'normal' }] }) }),
+        ), 0);
+        assert.deepEqual(requests.filter(({ method, url }) => method === 'POST' && url === '/api/v1/agent/tasks')[0].body, {
+            title: 'Revisar datos',
+            description: 'Subtarea de MyCompanies #140.\n\nComprobar evidencia disponible.',
+            priority: 'normal',
+            due_date: null,
+            workspace_id: 4,
+        });
+        assert.match(requests.find(({ url }) => url === '/api/v1/agent/tasks')?.key ?? '', /^[0-9a-f-]{36}$/);
+        assert.ok(requests.some(({ method, url, body }) => method === 'PATCH' && url === '/api/v1/agent/tasks/501/assignee' && body.assignee_agent_id === 6));
+        assert.ok(requests.some(({ method, url }) => method === 'GET' && url === '/api/v1/agent/tasks/140'));
+        assert.match(stdout.value, /Creada y asignada tarea #501 a Gala/);
     } finally {
         server.close();
         await once(server, 'close');
