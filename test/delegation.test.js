@@ -42,6 +42,12 @@ test('rejects malformed, oversized, duplicate, out-of-scope, and unauthorized de
     ] }), { workspaceId: 4, reports: [{ ...reports[0], permissions: [] }] }), /tasks.read/);
 });
 
+test('the CEO may choose to execute a task without delegation only when coordination explicitly allows it', () => {
+    const response = JSON.stringify({ tasks: [] });
+    assert.throws(() => parseDelegationResponse(response, { workspaceId: 4, reports }));
+    assert.deepEqual(parseDelegationResponse(response, { workspaceId: 4, reports, allowEmpty: true }), []);
+});
+
 test('creates deterministic UUID idempotency keys per parent task and action index', () => {
     const first = createDelegationPlan(140, [{ title: 'Research', description: 'Check signal', assigneeAgentId: 6, priority: 'normal', workspaceId: 4 }]);
     const retry = createDelegationPlan(140, [{ title: 'Research', description: 'Check signal', assigneeAgentId: 6, priority: 'normal', workspaceId: 4 }]);

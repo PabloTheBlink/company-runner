@@ -94,6 +94,7 @@ test('agent work requires one-shot mode and a supported provider with bounded op
         timeoutSeconds: 300,
         includeCompanyContext: false,
         includeMemory: false,
+        coordinateTeam: false,
     });
     assert.deepEqual(parseAgentWorkOptions(['--once', '--provider=agy', '--task=42', '--timeout=90']), {
         once: true,
@@ -102,6 +103,7 @@ test('agent work requires one-shot mode and a supported provider with bounded op
         timeoutSeconds: 90,
         includeCompanyContext: false,
         includeMemory: false,
+        coordinateTeam: false,
     });
     assert.deepEqual(parseAgentWorkOptions(['--once', '--provider=claude', '--include-company-context', '--include-memory']), {
         once: true,
@@ -110,6 +112,16 @@ test('agent work requires one-shot mode and a supported provider with bounded op
         timeoutSeconds: 300,
         includeCompanyContext: true,
         includeMemory: true,
+        coordinateTeam: false,
+    });
+    assert.deepEqual(parseAgentWorkOptions(['--once', '--provider=codex', '--coordinate-team']), {
+        once: true,
+        provider: 'codex',
+        taskId: null,
+        timeoutSeconds: 300,
+        includeCompanyContext: false,
+        includeMemory: false,
+        coordinateTeam: true,
     });
     assert.throws(() => parseAgentWorkOptions(['--provider=codex']), /--once/);
     assert.throws(() => parseAgentWorkOptions(['--once']), /provider/);
@@ -931,6 +943,206 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
         );
         assert.equal(await readFile(grantedFilePath, 'utf8'), 'Completed report.');
         assert.match(output.value, /Se descartaron los cambios locales porque la tarea no terminó como completed/);
+    } finally {
+        server.close();
+        await once(server, 'close');
+        await rm(testRoot, { recursive: true, force: true });
+    }
+});
+
+test('CEO worker delegates a task to an eligible direct report and leaves the parent open', async () => {
+    const testRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-coordination-test-'));
+    const companyRoot = path.join(testRoot, 'company');
+    const configRoot = path.join(testRoot, 'config');
+    await mkdir(companyRoot, { recursive: true });
+    await mkdir(configRoot, { mode: 0o700 });
+    const apiToken = 'C'.repeat(80);
+    const requestLog = [];
+    const task = {
+        id: 42,
+        title: 'Revisar oportunidad de mercado',
+        description: 'Analizar la evidencia disponible y recomendar próximos pasos.',
+        status: 'open',
+        priority: 'normal',
+        due_date: null,
+        assignee: { type: 'agent', id: 25, name: 'Vera' },
+        workspace: { id: 4, name: 'Research' },
+        parent_task_id: null,
+        child_tasks: [],
+        child_tasks_has_more: false,
+    };
+    const session = {
+        id: 31,
+        agent_id: 25,
+        task_id: 42,
+        provider: 'codex',
+        status: 'running',
+        phase: 'starting',
+        started_at: '2026-11-05T12:00:00Z',
+        last_reported_at: '2026-11-05T12:00:00Z',
+        finished_at: null,
+    };
+    const server = createServer(async (request, response) => {
+        assert.equal(request.headers.authorization, 'Bearer ' + apiToken);
+        let requestBody = '';
+        for await (const chunk of request) requestBody += chunk;
+        const body = requestBody === '' ? null : JSON.parse(requestBody);
+        requestLog.push({ method: request.method, url: request.url, body });
+        response.writeHead(request.method === 'POST'
+            && ['/api/v1/agent/tasks/42/claim', '/api/v1/agent/runtime-sessions', '/api/v1/agent/tasks'].includes(request.url)
+            ? 201
+            : 200, { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 25, uuid: 'vera-uuid', name: 'Vera', role: 'CEO' },
+                company: { id: 4, name: 'Empresa' },
+                permissions: [
+                    { name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'tasks.manage', scope: 'workspace', workspace_id: 4, workspace_name: 'Research' },
+                    { name: 'tasks.assign', scope: 'workspace', workspace_id: 4, workspace_name: 'Research' },
+                    { name: 'agents.permissions.manage', scope: 'company', workspace_id: null, workspace_name: null },
+                ],
+            }));
+            return;
+        }
+        if (request.url.startsWith('/api/v1/agent/tasks?')) {
+            const status = new URL(request.url, 'http://localhost').searchParams.get('status');
+            response.end(JSON.stringify({
+                tasks: status === 'open' ? [{ ...task, description: undefined }] : [],
+                has_more: false,
+                next_after: null,
+            }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/42') {
+            const currentTask = { ...task, status: claimToken === null ? 'open' : 'in_progress' };
+            response.end(JSON.stringify({ task: currentTask }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/agents') {
+            response.end(JSON.stringify({
+                agents: [{
+                    id: 6,
+                    uuid: '11111111-1111-4111-8111-111111111111',
+                    name: 'Gala',
+                    role: 'Marketing',
+                    status: 'active',
+                    permissions: [{ name: 'tasks.read', scope: 'workspace:4' }],
+                }],
+                has_more: false,
+                next_after: null,
+            }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/42/claim') {
+            claimToken = body.claim_token;
+            response.end(JSON.stringify({ claim: {
+                task_id: 42,
+                agent_id: 25,
+                task_status: 'in_progress',
+                claim_token: claimToken,
+                lease_expires_at: '2026-11-05T12:02:00Z',
+                replayed: false,
+            } }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/42/claim/heartbeat') {
+            response.end(JSON.stringify({ claim: { task_id: 42, lease_expires_at: '2026-11-05T12:02:00Z', renewed: true } }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/42/claim/finish') {
+            assert.equal(body.status, 'open');
+            assert.match(body.summary, /Delegué a Gala/);
+            assert.doesNotMatch(body.summary, /cambios locales descartados/);
+            response.end(JSON.stringify({ task: { id: 42, status: 'open' }, replayed: false }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/runtime-sessions') {
+            response.end(JSON.stringify({ session }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/runtime-sessions/31' && request.method === 'PATCH') {
+            response.end(JSON.stringify({ session: { ...session, status: body.status, phase: body.phase } }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks' && request.method === 'POST') {
+            assert.equal(body.parent_task_id, 42);
+            assert.equal(body.workspace_id, 4);
+            response.end(JSON.stringify({
+                task: {
+                    id: 501,
+                    title: body.title,
+                    description: body.description,
+                    status: 'open',
+                    priority: body.priority,
+                    due_date: null,
+                    assignee: null,
+                    workspace: { id: 4, name: 'Research' },
+                    parent_task_id: 42,
+                },
+                replayed: false,
+            }));
+            return;
+        }
+        if (request.url === '/api/v1/agent/tasks/501/assignee' && request.method === 'PATCH') {
+            assert.equal(body.assignee_agent_id, 6);
+            response.end(JSON.stringify({ task: {
+                id: 501,
+                title: 'Revisar mercado',
+                status: 'open',
+                assignee: { type: 'agent', id: 6, name: 'Gala' },
+            } }));
+            return;
+        }
+        response.writeHead(404);
+        response.end('{}');
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const configStore = {
+        localAgentFilePolicyPath: path.join(configRoot, 'agent-file-access.json'),
+        async loadAgentForDirectory() {
+            return {
+                server_url: 'http://127.0.0.1:' + server.address().port,
+                agent_id: 25,
+                company_id: 4,
+                allow_insecure_localhost: true,
+                api_token: apiToken,
+            };
+        },
+        async listAgentIdentitiesForDirectory() { return [{ id: 25, name: 'Vera' }, { id: 6, name: 'Gala' }]; },
+        async listAgentFileAccessForDirectory() { return []; },
+    };
+    const stdout = { value: '', write(chunk) { this.value += chunk; } };
+    let plannerPrompt = '';
+    let claimToken = null;
+
+    try {
+        assert.equal(await run(
+            ['agent', 'work', '--once', '--provider=codex', '--task=42', '--coordinate-team'],
+            { stdout },
+            companyRoot,
+            configStore,
+            async () => [{ provider: 'codex', command: 'codex' }],
+            undefined,
+            async (request) => {
+                plannerPrompt = request.prompt;
+                assert.equal(request.allowNetwork, false);
+                assert.match(request.prompt, /decide si conviene dividirla/i);
+                assert.match(request.prompt, /Gala/);
+                return { response: JSON.stringify({ tasks: [{
+                    title: 'Revisar mercado',
+                    description: 'Analizar evidencia disponible y documentar una recomendación.',
+                    assignee_agent_id: 6,
+                    priority: 'normal',
+                }] }) };
+            },
+        ), 0);
+        assert.match(stdout.value, /CEO Vera delegó la tarea #42/);
+        assert.ok(requestLog.some(({ method, url }) => method === 'POST' && url === '/api/v1/agent/tasks'));
+        assert.ok(requestLog.some(({ method, url }) => method === 'PATCH' && url === '/api/v1/agent/tasks/501/assignee'));
+        assert.ok(requestLog.some(({ url, body }) => url === '/api/v1/agent/tasks/42/claim/finish' && body.status === 'open'));
+        assert.doesNotMatch(plannerPrompt, new RegExp(apiToken));
     } finally {
         server.close();
         await once(server, 'close');

@@ -6,6 +6,12 @@ export function shouldApplyAgentTaskWrites(outcome) {
     return outcome !== null && typeof outcome === 'object' && outcome.status === 'completed';
 }
 
+function summarizeAgentTaskOutcome(outcome) {
+    if (shouldApplyAgentTaskWrites(outcome) || outcome.localWrites === false) return outcome.summary;
+
+    return ('Resultado ' + outcome.status + '; cambios locales descartados. ' + outcome.summary).slice(0, 4_000);
+}
+
 export async function loadAgentTaskContext({
     identity,
     task,
@@ -67,6 +73,7 @@ export async function runAgentWorkOnce({
     heartbeatTaskClaim,
     finishTaskClaim,
     executeTask,
+    isCandidateEligible = async () => true,
     createClaimToken = createRandomClaimToken,
     heartbeatIntervalMs = 30_000,
     setIntervalImplementation = setInterval,
@@ -81,6 +88,7 @@ export async function runAgentWorkOnce({
         || typeof heartbeatTaskClaim !== 'function'
         || typeof finishTaskClaim !== 'function'
         || typeof executeTask !== 'function'
+        || typeof isCandidateEligible !== 'function'
         || !Number.isSafeInteger(heartbeatIntervalMs) || heartbeatIntervalMs < 1_000) {
         throw new Error('La configuración de trabajo Agent no es válida.');
     }
@@ -101,6 +109,8 @@ export async function runAgentWorkOnce({
 
     candidates.sort((left, right) => left.id - right.id);
     for (const candidate of candidates) {
+        if (!await isCandidateEligible(candidate, currentDirectory)) continue;
+
         const claimToken = createClaimToken();
         if (typeof claimToken !== 'string' || !/^[A-Za-z0-9]{80}$/.test(claimToken)) {
             throw new Error('No se pudo crear un token seguro para la reserva de tarea.');
@@ -159,9 +169,7 @@ export async function runAgentWorkOnce({
             }
 
             await heartbeatTaskClaim(candidate.id, claimToken, currentDirectory);
-            const recordedSummary = shouldApplyAgentTaskWrites(outcome)
-                ? outcome.summary
-                : `Resultado ${outcome.status}; cambios locales descartados. ${outcome.summary}`.slice(0, 4_000);
+            const recordedSummary = summarizeAgentTaskOutcome(outcome);
             const finish = await finishTaskClaim(candidate.id, claimToken, outcome.status, recordedSummary, currentDirectory);
 
             return { task, outcome: { ...outcome, summary: recordedSummary }, finish };

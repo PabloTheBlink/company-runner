@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 const ALLOWED_TASK_KEYS = new Set(['title', 'description', 'assignee_agent_id', 'priority']);
 const ALLOWED_PRIORITIES = new Set(['low', 'normal', 'high']);
 
-export function parseDelegationResponse(response, { workspaceId, reports }) {
+export function parseDelegationResponse(response, { workspaceId, reports, allowEmpty = false }) {
     if (typeof response !== 'string' || Buffer.byteLength(response, 'utf8') > 64 * 1024) {
         throw new Error('El plan de delegación supera el límite permitido.');
     }
@@ -15,8 +15,8 @@ export function parseDelegationResponse(response, { workspaceId, reports }) {
     }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)
         || Object.keys(parsed).length !== 1 || !Array.isArray(parsed.tasks)
-        || parsed.tasks.length < 1 || parsed.tasks.length > 3) {
-        throw new Error('El plan debe contener entre 1 y 3 tareas.');
+        || parsed.tasks.length > 3 || (!allowEmpty && parsed.tasks.length < 1)) {
+        throw new Error(allowEmpty ? 'El plan debe contener entre 0 y 3 tareas.' : 'El plan debe contener entre 1 y 3 tareas.');
     }
     if (!Number.isSafeInteger(workspaceId) || workspaceId < 1 || !Array.isArray(reports)) {
         throw new Error('El contexto de delegación no es válido.');
