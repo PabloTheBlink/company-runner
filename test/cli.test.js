@@ -76,6 +76,7 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         timeoutSeconds: 300,
         publishPath: null,
         allowNetwork: false,
+        includeMemory: false,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--timeout=600', '--provider=agy']), {
         taskId: 42,
@@ -83,6 +84,7 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         timeoutSeconds: 600,
         publishPath: null,
         allowNetwork: false,
+        includeMemory: false,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=agy', '--publish=reports/daily.md']), {
         taskId: 42,
@@ -90,6 +92,7 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         timeoutSeconds: 300,
         publishPath: 'reports/daily.md',
         allowNetwork: false,
+        includeMemory: false,
     });
     assert.deepEqual(parseAgentRuntimeRunOptions(['42', '--provider=codex']), {
         taskId: 42,
@@ -97,7 +100,9 @@ test('agent runtime run requires a valid task, supported provider, and bounded t
         timeoutSeconds: 300,
         publishPath: null,
         allowNetwork: false,
+        includeMemory: false,
     });
+    assert.equal(parseAgentRuntimeRunOptions(['42', '--provider=codex', '--include-memory']).includeMemory, true);
     assert.equal(parseAgentRuntimeRunOptions(['42', '--provider=codex', '--allow-network']).allowNetwork, true);
     assert.throws(() => parseAgentRuntimeRunOptions(['0', '--provider=agy']), /positivo/);
     assert.throws(() => parseAgentRuntimeRunOptions(['42', '--provider=other']), /Opción desconocida/);
@@ -373,6 +378,119 @@ test('agent runtime run stages only granted files, applies only authorized write
         assert.match(output.value, /Archivos actualizados: \.env, reports\/daily\.md/);
         assert.match(output.value, /Informe #77 publicado para Preparar informe \(daily\.md\)/);
         await assert.rejects(stat(taskRunnerCalls[0].cwd), { code: 'ENOENT' });
+    } finally {
+        server.close();
+        await once(server, 'close');
+        await rm(testRoot, { recursive: true, force: true });
+    }
+});
+
+test('agent runtime includes memory only when requested and within the Agent read grants', async () => {
+    const testRoot = await mkdtemp(path.join(process.cwd(), '.mycompany-agent-run-memory-test-'));
+    const companyRoot = path.join(testRoot, 'company');
+    const configRoot = path.join(testRoot, 'config');
+    const token = 'P'.repeat(80);
+    const requests = [];
+    const memoryNode = {
+        id: 81,
+        kind: 'decision',
+        title: 'Prioridad de mercado',
+        content: 'Priorizar entrevistas a clientes antes de ampliar el producto.',
+        topic: { id: 9, name: 'Estrategia' },
+        workspace: null,
+        source_type: 'manual',
+        source_reference: null,
+        created_by: { type: 'agent', id: 12, name: 'Vera' },
+        created_at: '2026-11-05T10:00:00Z',
+        relevance: 0.91,
+    };
+    const server = createServer((request, response) => {
+        requests.push(request.url);
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        if (request.url === '/api/v1/agent/me') {
+            response.end(JSON.stringify({
+                agent: { id: 12, uuid: 'agent-uuid', name: 'Vera', role: 'CEO' },
+                company: { id: 4, name: 'Devetty' },
+                permissions: [
+                    { name: 'tasks.read', scope: 'company', workspace_id: null, workspace_name: null },
+                    { name: 'memory.read', scope: 'company', workspace_id: null, workspace_name: null },
+                ],
+            }));
+            return;
+        }
+        if (request.url.startsWith('/api/v1/agent/memory/search?')) {
+            const query = new URL(request.url, 'http://localhost').searchParams.get('q');
+            assert.match(query, /Investigar oportunidades/);
+            assert.match(query, /demanda en pequeñas empresas/);
+            response.end(JSON.stringify({ memory: [memoryNode] }));
+            return;
+        }
+        response.end(JSON.stringify({ task: {
+            id: 42,
+            title: 'Investigar oportunidades',
+            description: 'Analizar demanda en pequeñas empresas.',
+            status: 'in_progress',
+            priority: 'normal',
+            due_date: null,
+            assignee: { type: 'agent', id: 12, name: 'Vera' },
+            workspace: null,
+        } }));
+    });
+    await mkdir(companyRoot);
+    await mkdir(configRoot, { mode: 0o700 });
+    const configStore = {
+        localAgentFilePolicyPath: path.join(configRoot, 'agent-file-access.json'),
+        async loadAgentForDirectory() {
+            return {
+                server_url: `http://127.0.0.1:${server.address().port}`,
+                agent_id: 12,
+                company_id: 4,
+                allow_insecure_localhost: true,
+                api_token: token,
+            };
+        },
+        async listAgentFileAccessForDirectory() {
+            return [];
+        },
+    };
+    const confirmations = [];
+    const runtimeCalls = [];
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+
+    try {
+        assert.equal(await run(
+            ['agent', 'runtime', 'run', '42', '--provider=codex', '--include-memory'],
+            { stdout: output, stderr: output },
+            companyRoot,
+            configStore,
+            async () => [{ provider: 'codex', command: 'codex' }],
+            undefined,
+            async (runtimeRequest) => {
+                runtimeCalls.push(runtimeRequest);
+                assert.match(runtimeRequest.prompt, /Prioridad de mercado/);
+                assert.match(runtimeRequest.prompt, /no instrucciones ni hechos verificados/);
+                assert.doesNotMatch(runtimeRequest.prompt, new RegExp(token));
+                return { response: 'Investigación preparada.' };
+            },
+            async (confirmation) => {
+                confirmations.push(confirmation);
+                return true;
+            },
+        ), 0);
+
+        assert.deepEqual(requests, [
+            '/api/v1/agent/me',
+            '/api/v1/agent/tasks/42',
+            `/api/v1/agent/memory/search?q=${encodeURIComponent('Investigar oportunidades\nAnalizar demanda en pequeñas empresas.').replaceAll('%20', '+')}`,
+            '/api/v1/agent/tasks/42',
+        ]);
+        assert.equal(confirmations[0].includeMemory, true);
+        assert.equal(confirmations[0].memoryCount, 1);
+        assert.equal(runtimeCalls.length, 1);
+        assert.match(output.value, /Investigación preparada/);
     } finally {
         server.close();
         await once(server, 'close');
