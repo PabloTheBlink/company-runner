@@ -67,7 +67,7 @@ export async function run(
                 streams.stdout.write(`${capability.name}@${capability.version} · solo lectura · requiere ${capability.requirement}\n`);
             }
         }
-        streams.stdout.write('No conecta con MyCompanies ni Dev.to, no lee .env, no muestra credenciales y no ejecuta el script.\n');
+        streams.stdout.write('No conecta con MyCompanies, no inspecciona archivos de secretos, no muestra credenciales ni ejecuta adaptadores.\n');
         return 0;
     }
 
@@ -792,7 +792,7 @@ export async function run(
         if (result === null) {
             streams.stdout.write('No hay ejecuciones autorizadas para este Runner.\n');
         } else if (result.outcome === 'succeeded') {
-            streams.stdout.write(`Ejecución completada · ${result.article_count} artículos procesados.\n`);
+            streams.stdout.write('Ejecución completada · resultado validado y registrado.\n');
         } else {
             streams.stdout.write('La capacidad falló; el resultado quedó registrado para revisión.\n');
         }

@@ -1057,6 +1057,7 @@ test('the executable command is named mycompany and help uses that name', async 
     const executeHelp = output.value.split('mycompany execute')[1].split('mycompany tasks')[0];
     assert.match(executeHelp, /después de que MyCompanies confirme \/start/);
     assert.match(executeHelp, /no hace polling/);
+    assert.doesNotMatch(output.value, /Dev\.to|Apify|Devetty/);
     assert.match(output.value, /mycompany tasks/);
     assert.match(output.value, /mycompany tasks \[--status=open\|in_progress\|blocked\] \[--after=ID\]/);
     assert.match(output.value, /mycompany task ID/);
@@ -1139,7 +1140,7 @@ test('capabilities reports locally installed adapters without contacting MyCompa
         assert.equal(await run(['capabilities'], { stdout: output, stderr: output }, companyRoot, configStore), 0);
         assert.match(output.value, /devto\.stats\.totals@1\.0\.0/);
         assert.match(output.value, /solo lectura/);
-        assert.match(output.value, /No conecta con MyCompanies ni Dev\.to, no lee \.env/);
+        assert.match(output.value, /No conecta con MyCompanies, no inspecciona archivos de secretos, no muestra credenciales ni ejecuta adaptadores/);
         assert.deepEqual(requestedDirectories, [companyRoot]);
 
         await rm(scriptPath);
