@@ -5,7 +5,8 @@ import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { agentWorkerStatePath, getAgentWorkerStatus, requestAgentWorkerStop, runAgentWorkerService, startAgentWorker } from './agent-worker.js';
+import { agentWorkerStatePath, getAgentWorkerStatus, requestAgentWorkerStop, runAgentWorkerService, startAgentWorker, updateAgentWorkerState } from './agent-worker.js';
+import { startAgentDirectReports } from './agent-team.js';
 import { ConfigStore } from './config.js';
 import { AgentClient, formatAssignee, RunnerClient } from './client.js';
 import { listLocalCapabilities } from './capabilities/index.js';
@@ -137,14 +138,16 @@ export async function run(
 
             if (agentCommand === 'status') {
                 const state = await getAgentWorkerStatus(statePath);
-                streams.stdout.write(formatAgentWorkerStatus(state));
+                const teamStates = await listAgentWorkerTeamStatuses(configStore, localConfiguration.company_root_path, state);
+                streams.stdout.write(formatAgentWorkerStatus(state, teamStates));
                 return 0;
             }
 
             if (agentCommand === 'stop') {
                 const state = await requestAgentWorkerStop(statePath);
+                const stoppedTeamMembers = await stopAgentWorkerTeam(configStore, localConfiguration.company_root_path, state);
                 streams.stdout.write(state.status === 'stopping'
-                    ? `Parada solicitada para ${safeTerminalText(localConfiguration.agent_name)}; terminará la tarea actual antes de salir.\n`
+                    ? `Parada solicitada para ${safeTerminalText(localConfiguration.agent_name)}; terminará la tarea actual antes de salir${stoppedTeamMembers > 0 ? ` y se detendrá el equipo (${stoppedTeamMembers} agentes)` : ''}.\n`
                     : 'No hay un worker activo para esta identidad y carpeta.\n');
                 return 0;
             }
@@ -192,27 +195,53 @@ export async function run(
             const localConfiguration = await configStore.loadAgentForDirectory(currentDirectory);
             const expectedStatePath = agentWorkerStatePath(configStore, localConfiguration.agent_id, localConfiguration.company_root_path);
             if (statePath !== expectedStatePath) throw new Error('El worker no coincide con la identidad y carpeta seleccionadas.');
-            const result = await runAgentWorkerService({
-                statePath,
-                pid: process.pid,
-                provider,
-                runWorkOnce: () => run(
-                    [
-                        'agent', 'work', '--once', `--provider=${provider}`,
-                        ...(options.includeCompanyContext ? ['--include-company-context'] : []),
-                        ...(options.includeMemory ? ['--include-memory'] : []),
-                    ],
-                    streams,
+            let teamAgents = [];
+            try {
+                const identity = await agentClient.identity(currentDirectory);
+                teamAgents = await startAgentDirectReports({
+                    identity,
+                    provider,
+                    includeCompanyContext: options.includeCompanyContext,
+                    includeMemory: options.includeMemory,
                     currentDirectory,
+                    companyRootPath: localConfiguration.company_root_path,
                     configStore,
-                    runtimeDetector,
-                    localFileAccessConfirmer,
-                    agentRuntimeRunner,
-                    agentRuntimeConfirmer,
-                    agentArtifactPublisher,
-                ),
-            });
-            return result.exit_code;
+                    agentClient,
+                    command: process.execPath,
+                    scriptPath: fileURLToPath(import.meta.url),
+                    statePathForAgent: (agentId) => agentWorkerStatePath(configStore, agentId, localConfiguration.company_root_path),
+                    startWorker: startAgentWorker,
+                });
+            } catch {
+                teamAgents = [{ status: 'team_unavailable' }];
+            }
+            await updateAgentWorkerState(statePath, { team_agents: teamAgents });
+
+            try {
+                const result = await runAgentWorkerService({
+                    statePath,
+                    pid: process.pid,
+                    provider,
+                    runWorkOnce: () => run(
+                        [
+                            'agent', 'work', '--once', `--provider=${provider}`,
+                            ...(options.includeCompanyContext ? ['--include-company-context'] : []),
+                            ...(options.includeMemory ? ['--include-memory'] : []),
+                        ],
+                        streams,
+                        currentDirectory,
+                        configStore,
+                        runtimeDetector,
+                        localFileAccessConfirmer,
+                        agentRuntimeRunner,
+                        agentRuntimeConfirmer,
+                        agentArtifactPublisher,
+                    ),
+                });
+                return result.exit_code;
+            } finally {
+                await stopAgentWorkerTeam(configStore, localConfiguration.company_root_path, { team_agents: teamAgents });
+            }
         }
 
         if (agentCommand === 'work') {
@@ -1370,17 +1399,31 @@ export function parseAgentWorkerOptions(command, argumentsList) {
     throw new Error(`Uso: mycompany agent ${command === 'status' ? 'status' : 'stop'} sin opciones.`);
 }
 
-function formatAgentWorkerStatus(state) {
-    if (state.status === 'stopped') {
-        return 'Worker detenido.\n';
+function formatAgentWorkerStatus(state, teamStates = []) {
+    const lines = [formatAgentWorkerLine(state)];
+    for (const entry of state.team_agents ?? []) {
+        if (!Number.isSafeInteger(entry.agent_id)) {
+            lines.push('Equipo · no se pudo consultar la jerarquía de agentes.');
+        } else if (['credential_missing', 'credential_unavailable', 'identity_mismatch', 'worker_start_failed'].includes(entry.status)) {
+            lines.push(`Equipo · ${safeTerminalText(entry.agent_name ?? `Agent #${entry.agent_id}`)} · ${formatTeamLaunchStatus(entry.status)}.`);
+        }
     }
+    for (const { agentName, agentId, workerState, depth } of teamStates) {
+        lines.push(`${'  '.repeat(depth)}Equipo · ${safeTerminalText(agentName)} (#${agentId}) · ${formatAgentWorkerLine(workerState).trim()}`);
+    }
+
+    return `${lines.join('\n')}\n`;
+}
+
+function formatAgentWorkerLine(state) {
+    const identity = typeof state.agent_name === 'string' ? safeTerminalText(state.agent_name) : 'Agent';
+    if (state.status === 'stopped') return `Worker detenido · ${identity}.`;
     if (state.status === 'failed') {
         const provider = typeof state.provider === 'string' ? safeTerminalText(state.provider) : 'codex';
-        return `Worker detenido por un error (${safeTerminalText(state.exit_reason ?? 'worker_error')}). Usa «mycompany agent start --provider=${provider}» para reintentarlo.\n`;
+        return `Worker detenido por un error (${safeTerminalText(state.exit_reason ?? 'worker_error')}) · ${identity}. Usa «mycompany agent start --provider=${provider}» para reintentarlo.`;
     }
 
     const statusLabel = state.status === 'stopping' ? 'deteniéndose' : state.status === 'starting' ? 'iniciando' : 'activo';
-    const identity = typeof state.agent_name === 'string' ? safeTerminalText(state.agent_name) : 'Agent';
     const provider = typeof state.provider === 'string' ? safeTerminalText(state.provider) : 'desconocido';
     const heartbeat = typeof state.heartbeat_at === 'string' ? safeTerminalText(state.heartbeat_at) : 'sin registro';
     const contextModes = [
@@ -1389,7 +1432,45 @@ function formatAgentWorkerStatus(state) {
     ].filter(Boolean);
     const contextLabel = contextModes.length === 0 ? 'sin contexto adicional' : contextModes.join(' + ');
 
-    return `Worker ${statusLabel} · ${identity} · ${provider} · ${contextLabel} · último latido ${heartbeat}.\n`;
+    return `Worker ${statusLabel} · ${identity} · ${provider} · ${contextLabel} · último latido ${heartbeat}.`;
+}
+
+function formatTeamLaunchStatus(status) {
+    return ({
+        credential_missing: 'sin credencial local ni permiso para emitirla',
+        credential_unavailable: 'no se pudo guardar una credencial local',
+        identity_mismatch: 'la identidad local no coincide con la empresa',
+        worker_start_failed: 'no se pudo iniciar su worker',
+    })[status] ?? 'no iniciado';
+}
+
+async function listAgentWorkerTeamStatuses(configStore, companyRootPath, state, depth = 0, seen = new Set()) {
+    if (depth >= 8 || !Array.isArray(state.team_agents)) return [];
+    const entries = [];
+    for (const agent of state.team_agents) {
+        if (!Number.isSafeInteger(agent.agent_id) || seen.has(agent.agent_id)) continue;
+        seen.add(agent.agent_id);
+        const childState = await getAgentWorkerStatus(agentWorkerStatePath(configStore, agent.agent_id, companyRootPath));
+        if (agent.status !== 'starting' && agent.status !== 'running' && agent.status !== 'stopping'
+            && childState.status === 'stopped') continue;
+        entries.push({
+            agentName: agent.agent_name ?? childState.agent_name ?? `Agent #${agent.agent_id}`,
+            agentId: agent.agent_id,
+            workerState: childState,
+            depth,
+        });
+        entries.push(...await listAgentWorkerTeamStatuses(configStore, companyRootPath, childState, depth + 1, seen));
+    }
+    return entries;
+}
+
+async function stopAgentWorkerTeam(configStore, companyRootPath, state) {
+    const teamStates = await listAgentWorkerTeamStatuses(configStore, companyRootPath, state);
+    for (const member of teamStates.toReversed()) {
+        await requestAgentWorkerStop(agentWorkerStatePath(configStore, member.agentId, companyRootPath));
+    }
+
+    return teamStates.length;
 }
 
 export function parseAgentRuntimeRunOptions(argumentsList) {
