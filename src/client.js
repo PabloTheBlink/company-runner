@@ -2332,7 +2332,7 @@ function isArtifactSummary(artifact) {
         && typeof artifact.created_at === 'string'
         && (artifact.uploaded_by === null
             || (typeof artifact.uploaded_by === 'object'
-                && artifact.uploaded_by.type === 'agent'
+                && ['agent', 'runner'].includes(artifact.uploaded_by.type)
                 && Number.isSafeInteger(artifact.uploaded_by.id)
             && typeof artifact.uploaded_by.name === 'string'));
 }

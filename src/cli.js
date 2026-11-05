@@ -72,7 +72,7 @@ export async function run(
     }
 
     if (command === 'artifacts' || command === 'artifact') {
-        const agentClient = new AgentClient(new ConfigStore());
+        const agentClient = new AgentClient(configStore);
         if (command === 'artifacts') {
             const options = parseArtifactListOptions(argumentsAfterCommand);
             const result = await agentClient.listArtifacts(currentDirectory, options.afterId);
@@ -106,7 +106,10 @@ export async function run(
             streams.stdout.write(`Fecha: ${safeTerminalText(artifact.created_at)}\n`);
             if (artifact.description !== null) streams.stdout.write(`Descripción: ${safeTerminalText(artifact.description)}\n`);
             if (artifact.source !== null) streams.stdout.write(`Origen: ${safeTerminalText(artifact.source)}\n`);
-            if (artifact.uploaded_by !== null) streams.stdout.write(`Publicado por: Agente ${safeTerminalText(artifact.uploaded_by.name)}\n`);
+            if (artifact.uploaded_by !== null) {
+                const publisherType = artifact.uploaded_by.type === 'runner' ? 'Runner' : 'Agente';
+                streams.stdout.write(`Publicado por: ${publisherType} ${safeTerminalText(artifact.uploaded_by.name)}\n`);
+            }
             streams.stdout.write(`SHA-256: ${artifact.sha256}\n`);
             return 0;
         }

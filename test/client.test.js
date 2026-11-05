@@ -999,6 +999,17 @@ test('agent publishes one selected company report and reads its artifact list', 
                 sha256: 'a'.repeat(64),
                 created_at: '2026-11-04T12:00:00.000000Z',
                 uploaded_by: { type: 'agent', id: 12, name: 'Analista' },
+            }, {
+                id: 33,
+                title: 'Informe compartido por Runner',
+                description: null,
+                source: 'Runner execution #4',
+                original_filename: 'runner.md',
+                mime_type: 'text/markdown',
+                size_bytes: 41,
+                sha256: 'b'.repeat(64),
+                created_at: '2026-11-05T12:00:00.000000Z',
+                uploaded_by: { type: 'runner', id: 4, name: 'HP' },
             }], has_more: false, next_after: null }));
         });
         const serverUrl = await listen(server);
@@ -1022,6 +1033,7 @@ test('agent publishes one selected company report and reads its artifact list', 
             assert.equal(published.id, 32);
             const list = await client.listArtifacts(companyRoot, 30);
             assert.equal(list.artifacts[0].uploaded_by.name, 'Analista');
+            assert.deepEqual(list.artifacts[1].uploaded_by, { type: 'runner', id: 4, name: 'HP' });
         } finally {
             server.close();
             await once(server, 'close');

@@ -1002,6 +1002,48 @@ test('artifact publish and download require explicit paths and valid metadata', 
     assert.throws(() => parseArtifactDownloadOptions(['42']), /output/);
 });
 
+test('artifact show labels a Runner as the publisher', async () => {
+    const token = 'A'.repeat(80);
+    const server = createServer((request, response) => {
+        assert.equal(request.url, '/api/v1/agent/artifacts/4');
+        assert.equal(request.headers.authorization, `Bearer ${token}`);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ artifact: {
+            id: 4,
+            title: 'Informe compartido por Runner',
+            description: null,
+            source: 'Runner execution #1',
+            original_filename: 'report.md',
+            mime_type: 'text/markdown',
+            size_bytes: 41,
+            sha256: 'b'.repeat(64),
+            created_at: '2026-11-05T12:00:00Z',
+            uploaded_by: { type: 'runner', id: 4, name: 'HP' },
+        } }));
+    });
+    const configStore = {
+        async loadAgentForDirectory() {
+            return {
+                server_url: `http://127.0.0.1:${server.address().port}`,
+                allow_insecure_localhost: true,
+                api_token: token,
+            };
+        },
+    };
+    const output = { value: '', write(chunk) { this.value += chunk; } };
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+
+    try {
+        assert.equal(await run(['artifact', 'show', '4'], { stdout: output, stderr: output }, process.cwd(), configStore), 0);
+        assert.match(output.value, /Publicado por: Runner HP/);
+        assert.doesNotMatch(output.value, /Publicado por: Agente HP/);
+    } finally {
+        server.close();
+        await once(server, 'close');
+    }
+});
+
 test('agent bet evidence command requires valid evidence fields and an HTTP source URL', () => {
     assert.deepEqual(parseAgentBetEvidenceOptions([
         '25',
