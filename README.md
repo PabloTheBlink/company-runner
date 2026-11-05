@@ -8,6 +8,8 @@
 - Runtime dependencies: none
 - License: MIT
 
+The CLI talks to MyCompanies through its HTTP API and has no direct database connection. Server database migrations and MariaDB compatibility are maintained in the Laravel repository; this validation does not change the Runner protocol or local Runner configuration.
+
 ## Install
 
 Once published to npm:
