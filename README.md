@@ -20,6 +20,8 @@ Once published to npm:
 npm install --global mycompanies-runner
 ```
 
+The current package tarball has also been installed into a clean local npm prefix and `mycompany help` was run from its installed executable. This validates the packed CLI without relying on this checkout. Publishing to npm and installing from the registry remain pending until an npm publisher is authenticated.
+
 Until then, install directly from GitHub:
 
 ```sh
