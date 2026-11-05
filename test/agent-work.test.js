@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseAgentWorkResponse, runAgentWorkOnce } from '../src/agent-work.js';
+import { parseAgentWorkResponse, runAgentWorkOnce, shouldApplyAgentTaskWrites } from '../src/agent-work.js';
+
+test('local Agent file writes are applied only for completed task outcomes', () => {
+    assert.equal(shouldApplyAgentTaskWrites({ status: 'completed' }), true);
+    assert.equal(shouldApplyAgentTaskWrites({ status: 'blocked' }), false);
+    assert.equal(shouldApplyAgentTaskWrites({ status: 'open' }), false);
+    assert.equal(shouldApplyAgentTaskWrites(null), false);
+});
 
 test('parses only a bounded structured task result with an allowed final state', () => {
     assert.deepEqual(parseAgentWorkResponse('{"status":"completed","summary":"Informe preparado."}'), {

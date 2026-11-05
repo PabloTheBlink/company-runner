@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
-import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentDelegationOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, parseAgentWorkOptions, readHiddenCode, run } from '../src/cli.js';
+import { parseAgentAssetId, parseAgentAssetsOptions, parseAgentAssignmentOptions, parseAgentBetConversionOptions, parseAgentBetEvidenceOptions, parseAgentBetStatusOptions, parseAgentBetsOptions, parseAgentCreateOptions, parseAgentGoalId, parseAgentGoalsOptions, parseAgentLoginOptions, parseAgentOfferId, parseAgentOfferStatusOptions, parseAgentOffersOptions, parseAgentPermissionGrantOptions, parseAgentPermissionRevokeOptions, parseAgentPermissionsOptions, parseAgentProfileEditOptions, parseAgentProfileId, parseAgentRuntimeFileAccessOptions, parseAgentRuntimePlanOptions, parseAgentRuntimeRunOptions, parseAgentDelegationOptions, parseAgentStatusOptions, parseAgentTaskCreateOptions, parseAgentTaskEditOptions, parseAgentTasksOptions, parseAgentWorkspaceId, parseAgentWorkspacesOptions, parseAgentAgentsOptions, parseAgentCredentialIssueOptions, parseAgentCredentialListOptions, parseAgentCredentialRevokeOptions, parseAgentMemoryOptions, parseArtifactDownloadOptions, parseArtifactId, parseArtifactListOptions, parseArtifactPublishOptions, parseEnrollOptions, parseTaskId, parseTasksOptions, parseAgentWorkOptions, parseAgentWorkerOptions, readHiddenCode, run } from '../src/cli.js';
 import { formatAssignee } from '../src/client.js';
 import { ConfigStore } from '../src/config.js';
 import { listLocalAgentRuntimes } from '../src/runtime.js';
@@ -105,6 +105,16 @@ test('agent work requires one-shot mode and a supported provider with bounded op
     assert.throws(() => parseAgentWorkOptions(['--once', '--provider=codex', '--task=0']), /positivo/);
     assert.throws(() => parseAgentWorkOptions(['--once', '--provider=codex', '--timeout=901']), /entre 10 y 900/);
     assert.throws(() => parseAgentWorkOptions(['--once', '--provider=codex', '--once']), /Uso:/);
+});
+
+test('agent worker controls require an explicit provider only when starting', () => {
+    assert.deepEqual(parseAgentWorkerOptions('start', ['--provider=codex']), { provider: 'codex' });
+    assert.deepEqual(parseAgentWorkerOptions('status', []), {});
+    assert.deepEqual(parseAgentWorkerOptions('stop', []), {});
+    assert.throws(() => parseAgentWorkerOptions('start', []), /provider/);
+    assert.throws(() => parseAgentWorkerOptions('start', ['--provider=other']), /provider/);
+    assert.throws(() => parseAgentWorkerOptions('status', ['--provider=codex']), /sin opciones/);
+    assert.throws(() => parseAgentWorkerOptions('stop', ['--force']), /sin opciones/);
 });
 
 test('agent delegation options require one provider and allow explicit apply only', () => {
@@ -723,9 +733,14 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
     const configRoot = path.join(testRoot, 'config');
     await mkdir(companyRoot, { recursive: true });
     await mkdir(configRoot, { mode: 0o700 });
+    const grantedFile = 'reports/market/agent-work-test.md';
+    const grantedFilePath = path.join(companyRoot, grantedFile);
+    await mkdir(path.dirname(grantedFilePath), { recursive: true });
+    await writeFile(grantedFilePath, 'Original report.');
     const apiToken = 'A'.repeat(80);
     let claimToken = null;
     const requestLog = [];
+    let outcome = { status: 'completed', summary: 'Resumen preparado.' };
     const task = {
         id: 42,
         title: 'Prepare market summary',
@@ -793,10 +808,10 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
         if (request.url === '/api/v1/agent/tasks/42/claim/finish') {
             assert.deepEqual(JSON.parse(body), {
                 claim_token: claimToken,
-                status: 'completed',
-                summary: 'Resumen preparado.',
+                status: outcome.status,
+                summary: outcome.summary,
             });
-            response.end(JSON.stringify({ task: { id: 42, status: 'completed' }, replayed: false }));
+            response.end(JSON.stringify({ task: { id: 42, status: outcome.status }, replayed: false }));
             return;
         }
         if (request.url === '/api/v1/agent/runtime-sessions/31') {
@@ -823,7 +838,7 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                 agent_id: 12, company_id: 4, allow_insecure_localhost: true, api_token: apiToken,
             };
         },
-        async listAgentFileAccessForDirectory() { return []; },
+        async listAgentFileAccessForDirectory() { return [{ path: grantedFile, operations: ['write'] }]; },
     };
     const output = { value: '', write(chunk) { this.value += chunk; } };
     let providerPrompt = '';
@@ -842,7 +857,8 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
                 assert.equal(request.signal.aborted, false);
                 assert.doesNotMatch(request.prompt, new RegExp(apiToken));
                 assert.doesNotMatch(request.prompt, new RegExp(claimToken ?? 'missing-token'));
-                return { response: JSON.stringify({ status: 'completed', summary: 'Resumen preparado.' }) };
+                await writeFile(path.join(request.cwd, grantedFile), outcome.status === 'completed' ? 'Completed report.' : 'Partial blocked report.');
+                return { response: JSON.stringify(outcome) };
             },
         ), 0);
 
@@ -852,6 +868,23 @@ test('agent work claims, runs without passing the lease token to Codex, and reco
         assert.ok(requestLog.some(({ url }) => url === '/api/v1/agent/tasks/42/claim/heartbeat'));
         assert.ok(requestLog.some(({ url, body }) => url === '/api/v1/agent/tasks/42/claim/finish' && body.status === 'completed'));
         assert.ok(requestLog.some(({ url, body }) => url === '/api/v1/agent/runtime-sessions/31' && body.status === 'succeeded'));
+        assert.equal(await readFile(grantedFilePath, 'utf8'), 'Completed report.');
+
+        outcome = { status: 'blocked', summary: 'Falta una evidencia autorizada.' };
+        await run(
+            ['agent', 'work', '--once', '--provider=codex', '--task=42'],
+            { stdout: output },
+            companyRoot,
+            configStore,
+            async () => [{ provider: 'codex', command: 'codex' }],
+            undefined,
+            async (request) => {
+                await writeFile(path.join(request.cwd, grantedFile), 'Partial blocked report.');
+                return { response: JSON.stringify(outcome) };
+            },
+        );
+        assert.equal(await readFile(grantedFilePath, 'utf8'), 'Completed report.');
+        assert.match(output.value, /Se descartaron los cambios locales porque la tarea no terminó como completed/);
     } finally {
         server.close();
         await once(server, 'close');
@@ -1495,6 +1528,8 @@ test('the executable command is named mycompany and help uses that name', async 
     assert.match(output.value, /mycompany agent login/);
     assert.match(output.value, /mycompany agent identities/);
     assert.match(output.value, /mycompany agent work --once --provider=codex\|claude\|agy/);
+    assert.match(output.value, /mycompany agent start --provider=codex\|claude\|agy/);
+    assert.match(output.value, /mycompany agent status \| stop/);
     assert.match(output.value, /mycompany agent credential list AGENT_ID/);
     assert.match(output.value, /mycompany agent runtime files list \| grant RUTA/);
     assert.match(output.value, /mycompany agent runtime run TASK_ID --provider=codex\|claude\|agy/);

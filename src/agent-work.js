@@ -1,6 +1,10 @@
 import { randomBytes } from 'node:crypto';
 
 const ACTIVE_STATUSES = ['open', 'in_progress'];
+
+export function shouldApplyAgentTaskWrites(outcome) {
+    return outcome !== null && typeof outcome === 'object' && outcome.status === 'completed';
+}
 const TOKEN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
 export function parseAgentWorkResponse(response) {

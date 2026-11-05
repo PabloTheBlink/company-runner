@@ -5,6 +5,7 @@ import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { agentWorkerStatePath, getAgentWorkerStatus, requestAgentWorkerStop, runAgentWorkerService, startAgentWorker } from './agent-worker.js';
 import { ConfigStore } from './config.js';
 import { AgentClient, formatAssignee, RunnerClient } from './client.js';
 import { listLocalCapabilities } from './capabilities/index.js';
@@ -13,7 +14,7 @@ import { applyLocalAgentFileWrites, stageLocalAgentFiles } from './local-agent-f
 import { syncAgentProfileInstructions } from './agent-profile-sync.js';
 import { runAgentRuntime } from './agent-runtime.js';
 import { applyDelegationPlan, parseDelegationResponse } from './delegation.js';
-import { parseAgentWorkResponse, runAgentWorkOnce } from './agent-work.js';
+import { parseAgentWorkResponse, runAgentWorkOnce, shouldApplyAgentTaskWrites } from './agent-work.js';
 import { createAgentRuntimePlan, listLocalAgentRuntimes, normalizeLocalAgentPath } from './runtime.js';
 
 export async function run(
@@ -129,6 +130,78 @@ export async function run(
     if (command === 'agent') {
         const [agentCommand, ...agentArguments] = argumentsAfterCommand;
         const agentClient = new AgentClient(configStore);
+        if (['start', 'status', 'stop'].includes(agentCommand)) {
+            const options = parseAgentWorkerOptions(agentCommand, agentArguments);
+            const localConfiguration = await configStore.loadAgentForDirectory(currentDirectory);
+            const statePath = agentWorkerStatePath(configStore, localConfiguration.agent_id, localConfiguration.company_root_path);
+
+            if (agentCommand === 'status') {
+                const state = await getAgentWorkerStatus(statePath);
+                streams.stdout.write(formatAgentWorkerStatus(state));
+                return 0;
+            }
+
+            if (agentCommand === 'stop') {
+                const state = await requestAgentWorkerStop(statePath);
+                streams.stdout.write(state.status === 'stopping'
+                    ? `Parada solicitada para ${safeTerminalText(localConfiguration.agent_name)}; terminará la tarea actual antes de salir.\n`
+                    : 'No hay un worker activo para esta identidad y carpeta.\n');
+                return 0;
+            }
+
+            const installedRuntimes = await runtimeDetector();
+            if (!installedRuntimes.some(({ provider }) => provider === options.provider)) {
+                throw new Error(`El proveedor ${options.provider} no está instalado localmente.`);
+            }
+            const identity = await agentClient.identity(currentDirectory);
+            const state = await startAgentWorker({
+                statePath,
+                agentId: identity.agent.id,
+                command: process.execPath,
+                args: [fileURLToPath(import.meta.url), 'agent', 'service', `--provider=${options.provider}`],
+                cwd: localConfiguration.company_root_path,
+                metadata: {
+                    provider: options.provider,
+                    agent_id: identity.agent.id,
+                    agent_name: identity.agent.name,
+                    company_id: identity.company.id,
+                    company_name: identity.company.name,
+                },
+            });
+            streams.stdout.write(state.already_running
+                ? `El worker de ${safeTerminalText(state.agent_name)} ya está ${state.status}.\n`
+                : `Worker de ${safeTerminalText(state.agent_name)} iniciado con ${state.provider}. Usa «mycompany agent status» para consultar y «mycompany agent stop» para pararlo.\n`);
+            return 0;
+        }
+
+        if (agentCommand === 'service') {
+            const { provider } = parseAgentWorkerOptions('service', agentArguments);
+            const statePath = process.env.MYCOMPANY_WORKER_STATE_PATH;
+            if (typeof statePath !== 'string' || !path.isAbsolute(statePath)) {
+                throw new Error('El proceso de worker solo puede iniciarse mediante mycompany agent start.');
+            }
+            const localConfiguration = await configStore.loadAgentForDirectory(currentDirectory);
+            const expectedStatePath = agentWorkerStatePath(configStore, localConfiguration.agent_id, localConfiguration.company_root_path);
+            if (statePath !== expectedStatePath) throw new Error('El worker no coincide con la identidad y carpeta seleccionadas.');
+            const result = await runAgentWorkerService({
+                statePath,
+                pid: process.pid,
+                provider,
+                runWorkOnce: () => run(
+                    ['agent', 'work', '--once', `--provider=${provider}`],
+                    streams,
+                    currentDirectory,
+                    configStore,
+                    runtimeDetector,
+                    localFileAccessConfirmer,
+                    agentRuntimeRunner,
+                    agentRuntimeConfirmer,
+                    agentArtifactPublisher,
+                ),
+            });
+            return result.exit_code;
+        }
+
         if (agentCommand === 'work') {
             const options = parseAgentWorkOptions(agentArguments);
             const installedRuntimes = await runtimeDetector();
@@ -195,14 +268,19 @@ export async function run(
                         const outcome = parseAgentWorkResponse(runtimeResult.response);
                         await renewLease();
                         if (signal.aborted) throw new Error('Se perdió la reserva de la tarea; se descartan los cambios locales.');
-                        await agentClient.updateRuntimeSession(runtimeSession.id, 'running', 'applying_files', currentDirectory);
-                        const writtenPaths = await applyLocalAgentFileWrites({
-                            agentId: plan.agentId,
-                            grants: fileGrants,
-                            companyRoot: currentDirectory,
-                            stagingRoot,
-                            workspace,
-                        });
+                        let writtenPaths = [];
+                        if (shouldApplyAgentTaskWrites(outcome)) {
+                            await agentClient.updateRuntimeSession(runtimeSession.id, 'running', 'applying_files', currentDirectory);
+                            writtenPaths = await applyLocalAgentFileWrites({
+                                agentId: plan.agentId,
+                                grants: fileGrants,
+                                companyRoot: currentDirectory,
+                                stagingRoot,
+                                workspace,
+                            });
+                        } else {
+                            streams.stdout.write('Se descartaron los cambios locales porque la tarea no terminó como completed.\n');
+                        }
                         streams.stdout.write(`Resultado de ${safeTerminalText(identity.agent.name)}: ${safeTerminalText(outcome.summary)}\n`);
                         if (writtenPaths.length > 0) {
                             streams.stdout.write(`Archivos actualizados: ${writtenPaths.map(safeTerminalText).join(', ')}.\n`);
@@ -1223,6 +1301,38 @@ export function parseAgentWorkOptions(argumentsList) {
     return { once, provider, taskId, timeoutSeconds };
 }
 
+export function parseAgentWorkerOptions(command, argumentsList) {
+    if (command === 'start' || command === 'service') {
+        if (argumentsList.length !== 1 || !/^--provider=(codex|claude|agy)$/.test(argumentsList[0])) {
+            throw new Error(`Uso: mycompany agent ${command === 'start' ? 'start' : 'service'} --provider=codex|claude|agy.`);
+        }
+
+        return { provider: argumentsList[0].slice('--provider='.length) };
+    }
+    if ((command === 'status' || command === 'stop') && argumentsList.length === 0) {
+        return {};
+    }
+
+    throw new Error(`Uso: mycompany agent ${command === 'status' ? 'status' : 'stop'} sin opciones.`);
+}
+
+function formatAgentWorkerStatus(state) {
+    if (state.status === 'stopped') {
+        return 'Worker detenido.\n';
+    }
+    if (state.status === 'failed') {
+        const provider = typeof state.provider === 'string' ? safeTerminalText(state.provider) : 'codex';
+        return `Worker detenido por un error (${safeTerminalText(state.exit_reason ?? 'worker_error')}). Usa «mycompany agent start --provider=${provider}» para reintentarlo.\n`;
+    }
+
+    const statusLabel = state.status === 'stopping' ? 'deteniéndose' : state.status === 'starting' ? 'iniciando' : 'activo';
+    const identity = typeof state.agent_name === 'string' ? safeTerminalText(state.agent_name) : 'Agent';
+    const provider = typeof state.provider === 'string' ? safeTerminalText(state.provider) : 'desconocido';
+    const heartbeat = typeof state.heartbeat_at === 'string' ? safeTerminalText(state.heartbeat_at) : 'sin registro';
+
+    return `Worker ${statusLabel} · ${identity} · ${provider} · último latido ${heartbeat}.\n`;
+}
+
 export function parseAgentRuntimeRunOptions(argumentsList) {
     const usage = 'Uso: mycompany agent runtime run TASK_ID --provider=codex|claude|agy [--timeout=SEGUNDOS] [--publish=RUTA] [--allow-network] [--include-company-context] [--include-memory [--memory-query=TEXTO] [--memory-topic=ID] [--memory-workspace=ID]].';
     if (argumentsList.length < 2 || argumentsList.length > 10) {
@@ -2095,7 +2205,11 @@ function printHelp(stdout) {
     stdout.write('    Consulta la identidad Agent y sus permisos vigentes desde la carpeta de empresa asociada. No ejecuta tareas.\n');
     stdout.write('  mycompany agent work --once --provider=codex|claude|agy [--task=ID] [--timeout=SEGUNDOS]\n');
     stdout.write('    Reclama una tarea abierta asignada a esta identidad, renueva su lease y registra su estado final. No pide confirmación interactiva: la invocación explícita inicia una ejecución sin red, limitada a los permisos locales de archivos. No publica informes ni delega subtareas automáticamente.\n');
-    stdout.write('    Si no se indica --task, procesa la tarea asignada más antigua que pueda reservar. Si falla la ejecución, deja caducar el lease para permitir reintento. No hay modo continuo ni servicio de fondo todavía.\n');
+    stdout.write('    Si no se indica --task, procesa la tarea asignada más antigua que pueda reservar. Si falla la ejecución, deja caducar el lease para permitir reintento.\n');
+    stdout.write('  mycompany agent start --provider=codex|claude|agy\n');
+    stdout.write('    Inicia en segundo plano un worker local para el Agent seleccionado en esta carpeta.\n');
+    stdout.write('  mycompany agent status | stop\n');
+    stdout.write('    Consulta el worker o solicita una parada limpia tras la tarea actual. No reclama otra tarea al parar.\n');
     stdout.write('  mycompany agent runtime\n');
     stdout.write('    Detecta Codex, Claude Code y Antigravity CLI (agy) en PATH. No conecta, lee credenciales ni inicia una sesión Agent.\n');
     stdout.write('  mycompany agent runtime plan TASK_ID --provider=codex|claude|agy\n');
